@@ -1,0 +1,47 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+
+  --color-ink: #12203D;
+  --color-paper: #FAF8F3;
+  --color-paper-dim: #F1EEE5;
+  --color-ledger: #2454FF;
+  --color-ledger-dim: #E9EEFF;
+  --color-good: #16805A;
+  --color-good-dim: #E4F5EC;
+  --color-warn: #B5720A;
+  --color-warn-dim: #FBF0DC;
+  --color-bad: #D0483D;
+  --color-bad-dim: #FBE9E7;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--color-paper);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-display { font-family: var(--font-display); }
+.font-mono-tab { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.ledger-card {
+  position: relative;
+  background: white;
+  border: 1px solid #E7E2D6;
+  border-radius: 14px;
+}
+
+::selection {
+  background: var(--color-ledger);
+  color: white;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ledger);
+  outline-offset: 2px;
+}
