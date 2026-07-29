@@ -12,6 +12,7 @@ export function InvoiceDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const logoUrl = (user?.user_metadata as Record<string, string> | undefined)?.business_logo_url
   const [invoice, setInvoice] = useState<Invoice | null>(null)
   const [showPayment, setShowPayment] = useState(false)
   const [payAmount, setPayAmount] = useState('')
@@ -60,7 +61,29 @@ export function InvoiceDetail() {
     }
   }
 
-  function downloadPdf() {
+  async function loadImageAsDataUrl(url: string): Promise<{ dataUrl: string; format: 'PNG' | 'JPEG'; width: number; height: number } | null> {
+    try {
+      const res = await fetch(url)
+      const blob = await res.blob()
+      const format: 'PNG' | 'JPEG' = blob.type.includes('png') ? 'PNG' : 'JPEG'
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = reject
+        reader.readAsDataURL(blob)
+      })
+      const dims = await new Promise<{ width: number; height: number }>((resolve) => {
+        const img = new Image()
+        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
+        img.src = dataUrl
+      })
+      return { dataUrl, format, ...dims }
+    } catch {
+      return null // logo failed to load — PDF still generates without it
+    }
+  }
+
+  async function downloadPdf() {
     if (!invoice) return
     const doc = new jsPDF({ unit: 'mm', format: 'a4' })
     const marginX = 14
@@ -71,6 +94,7 @@ export function InvoiceDetail() {
     let y = 20
 
     const paidAmt = paid
+    const logo = logoUrl ? await loadImageAsDataUrl(logoUrl) : null
 
     function drawFooter() {
       doc.setFont('helvetica', 'normal')
@@ -111,9 +135,17 @@ export function InvoiceDetail() {
       if (opts?.repeatTableHeader) drawTableHeader()
     }
 
+    let titleX = marginX
+    if (logo) {
+      const logoHeight = 14
+      const logoWidth = (logo.width / logo.height) * logoHeight
+      doc.addImage(logo.dataUrl, logo.format, marginX, y - 10, logoWidth, logoHeight)
+      titleX = marginX + logoWidth + 5
+    }
+
     doc.setFontSize(18)
     doc.setFont('helvetica', 'bold')
-    doc.text('INVOICE', marginX, y)
+    doc.text('INVOICE', titleX, y)
     doc.setFontSize(10)
     doc.setFont('helvetica', 'normal')
     doc.text(invoice.invoice_number, pageWidth - marginX, y, { align: 'right' })
@@ -224,9 +256,12 @@ export function InvoiceDetail() {
         {/* Document preview */}
         <div className="ledger-card p-5 mb-5">
           <div className="flex justify-between items-start mb-5">
-            <div>
-              <p className="font-display font-bold text-lg">Invoice</p>
-              <p className="text-xs text-slate-500 font-mono-tab">{invoice.invoice_number}</p>
+            <div className="flex items-center gap-3">
+              {logoUrl && <img src={logoUrl} alt="Business logo" className="w-11 h-11 object-contain rounded" />}
+              <div>
+                <p className="font-display font-bold text-lg">Invoice</p>
+                <p className="text-xs text-slate-500 font-mono-tab">{invoice.invoice_number}</p>
+              </div>
             </div>
             <div className="text-right text-xs text-slate-500">
               <p>Issued {format(parseISO(invoice.issue_date), 'dd/MM/yyyy')}</p>
