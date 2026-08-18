@@ -26,13 +26,11 @@ import {
 } from 'date-fns'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
-
 import {
   deleteInvoice,
   fetchInvoice,
   recordPayment,
 } from '../lib/data'
-
 import {
   amountPaid,
   deriveStatus,
@@ -41,7 +39,6 @@ import {
   invoiceTotal,
   type Invoice,
 } from '../lib/types'
-
 import { StatusPill } from '../components/StatusPill'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -50,10 +47,6 @@ export function InvoiceDetail() {
   const navigate = useNavigate()
   const { user } = useAuth()
 
-  /*
-   * This ref points to the actual invoice preview.
-   * The PDF is generated from this exact element.
-   */
   const invoiceRef = useRef<HTMLDivElement | null>(null)
 
   const meta = (user?.user_metadata ?? {}) as Record<string, string>
@@ -61,23 +54,17 @@ export function InvoiceDetail() {
 
   const [showMore, setShowMore] = useState(false)
   const [invoice, setInvoice] = useState<Invoice | null>(null)
-
   const [showPayment, setShowPayment] = useState(false)
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState('Bank transfer')
-
   const [saving, setSaving] = useState(false)
   const [sharing, setSharing] = useState(false)
   const [shareMessage, setShareMessage] = useState('')
 
-  /*
-   * Load invoice
-   */
   const load = useCallback(async () => {
     if (!id) return
 
     const inv = await fetchInvoice(id)
-
     setInvoice(inv)
   }, [id])
 
@@ -85,9 +72,6 @@ export function InvoiceDetail() {
     void load()
   }, [load])
 
-  /*
-   * Loading state
-   */
   if (!invoice) {
     return (
       <p className="text-center text-sm text-slate-400 py-16">
@@ -96,11 +80,7 @@ export function InvoiceDetail() {
     )
   }
 
-  /*
-   * Invoice calculations
-   */
   const items = invoice.items ?? []
-
   const subtotal = invoiceSubtotal(items)
 
   const total = invoiceTotal(
@@ -109,44 +89,27 @@ export function InvoiceDetail() {
     invoice.discount
   )
 
-  const paid = amountPaid(
-    invoice.payments ?? []
-  )
-
-  const balance = Math.max(
-    0,
-    total - paid
-  )
-
+  const paid = amountPaid(invoice.payments ?? [])
+  const balance = Math.max(0, total - paid)
   const status = deriveStatus(invoice)
 
-  const daysOverdue =
-    differenceInCalendarDays(
-      new Date(),
-      parseISO(invoice.due_date)
-    )
+  const daysOverdue = differenceInCalendarDays(
+    new Date(),
+    parseISO(invoice.due_date)
+  )
 
-  /*
-   * Delete invoice
-   */
   async function handleDelete() {
     if (
       !id ||
-      !confirm(
-        'Delete this invoice? This cannot be undone.'
-      )
+      !confirm('Delete this invoice? This cannot be undone.')
     ) {
       return
     }
 
     await deleteInvoice(id)
-
     navigate('/')
   }
 
-  /*
-   * Record payment
-   */
   async function handleRecordPayment(
     e: React.FormEvent
   ) {
@@ -165,9 +128,7 @@ export function InvoiceDetail() {
         id,
         user.id,
         amount,
-        new Date()
-          .toISOString()
-          .slice(0, 10),
+        new Date().toISOString().slice(0, 10),
         payMethod
       )
 
@@ -181,278 +142,338 @@ export function InvoiceDetail() {
   }
 
   /*
-   * ============================================================
-   * CREATE PDF
-   * ============================================================
+   * ==========================================================
+   * CREATE PDF FROM THE ACTUAL INVOICE PREVIEW
+   * ==========================================================
    *
-   * IMPORTANT:
+   * The visible invoice preview is the source of truth.
+   * This means the PDF keeps the same:
    *
-   * The PDF is created from the actual invoice preview.
+   * - Invoice header
+   * - Business information
+   * - Client information
+   * - Invoice number
+   * - Dates
+   * - Items
+   * - Quantities
+   * - Prices
+   * - Amounts
+   * - Subtotal
+   * - Tax
+   * - Discount
+   * - Total
+   * - Payment information
+   * - Terms & conditions
    *
-   * This means:
-   *
-   * Screen invoice
-   *       ↓
-   * html2canvas
-   *       ↓
-   * PDF
-   *
-   * So the PDF does NOT use a second invoice design.
+   * Long invoices are automatically split across A4 pages.
    */
-
   async function createPdf(): Promise<Blob | undefined> {
     const element = invoiceRef.current
 
     if (!element) {
+      console.error(
+        'Invoice PDF: invoice element not found'
+      )
+
       return undefined
     }
 
-    /*
-     * Wait for fonts.
-     */
-    if (document.fonts?.ready) {
-      await document.fonts.ready
-    }
+    try {
+      /*
+       * Wait for fonts to finish loading.
+       */
+      if (document.fonts?.ready) {
+        await document.fonts.ready
+      }
 
-    /*
-     * Wait one browser frame so images/fonts/layout
-     * are fully rendered before capturing.
-     */
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => {
-        resolve()
+      /*
+       * Give the browser time to finish rendering.
+       */
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve()
+          })
+        })
       })
-    })
 
-    /*
-     * Capture the actual invoice.
-     */
-    const canvas = await html2canvas(
-      element,
-      {
+      /*
+       * Wait for invoice images to load.
+       *
+       * If an image fails to load, we continue instead
+       * of allowing the entire PDF generation to fail.
+       */
+      const images = Array.from(
+        element.querySelectorAll('img')
+      )
+
+      await Promise.all(
+        images.map(
+          (img) =>
+            new Promise<void>((resolve) => {
+              if (img.complete) {
+                resolve()
+                return
+              }
+
+              img.onload = () => resolve()
+              img.onerror = () => resolve()
+            })
+        )
+      )
+
+      /*
+       * Capture the actual invoice displayed on screen.
+       */
+      const canvas = await html2canvas(element, {
         scale: 2,
         useCORS: true,
         allowTaint: false,
         backgroundColor: '#ffffff',
         logging: false,
         imageTimeout: 15000,
-      }
-    )
 
-    /*
-     * Create A4 PDF.
-     */
-    const pdf = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4',
-      compress: true,
-    })
+        /*
+         * Capture the actual invoice dimensions.
+         */
+        width: element.scrollWidth,
+        height: element.scrollHeight,
+        windowWidth: element.scrollWidth,
+        windowHeight: element.scrollHeight,
+      })
 
-    const pageWidth = 210
-    const pageHeight = 297
-
-    /*
-     * PDF margins.
-     */
-    const margin = 10
-
-    const printableWidth =
-      pageWidth - margin * 2
-
-    const printableHeight =
-      pageHeight - margin * 2
-
-    /*
-     * Scale captured invoice to fit A4 width.
-     */
-    const scale =
-      printableWidth / canvas.width
-
-    const renderedHeight =
-      canvas.height * scale
-
-    /*
-     * ==========================================================
-     * ONE PAGE
-     * ==========================================================
-     */
-    if (
-      renderedHeight <=
-      printableHeight
-    ) {
-      pdf.addImage(
-        canvas.toDataURL(
-          'image/png',
-          1
-        ),
-        'PNG',
-        margin,
-        margin,
-        printableWidth,
-        renderedHeight,
-        undefined,
-        'FAST'
-      )
-
-      return pdf.output('blob')
-    }
-
-    /*
-     * ==========================================================
-     * MULTI-PAGE
-     * ==========================================================
-     *
-     * If the invoice is longer than A4,
-     * split the captured invoice across pages.
-     *
-     * We do NOT rebuild the invoice.
-     *
-     * We simply split the exact visual invoice.
-     */
-
-    const sourcePageHeight =
-      printableHeight / scale
-
-    let sourceY = 0
-    let pageNumber = 0
-
-    while (
-      sourceY < canvas.height
-    ) {
-      if (pageNumber > 0) {
-        pdf.addPage()
-      }
-
-      const remainingHeight =
-        canvas.height - sourceY
-
-      const currentSourceHeight =
-        Math.min(
-          sourcePageHeight,
-          remainingHeight
+      if (!canvas.width || !canvas.height) {
+        console.error(
+          'Invoice PDF: empty canvas'
         )
 
-      /*
-       * Create temporary canvas
-       * for this PDF page.
-       */
-      const pageCanvas =
-        document.createElement(
-          'canvas'
-        )
-
-      pageCanvas.width =
-        canvas.width
-
-      pageCanvas.height =
-        Math.ceil(
-          currentSourceHeight
-        )
-
-      const pageContext =
-        pageCanvas.getContext(
-          '2d'
-        )
-
-      if (!pageContext) {
         return undefined
       }
 
       /*
-       * White background.
+       * Create A4 PDF.
        */
-      pageContext.fillStyle =
-        '#ffffff'
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+        compress: true,
+      })
 
-      pageContext.fillRect(
-        0,
-        0,
-        pageCanvas.width,
-        pageCanvas.height
-      )
+      const pageWidth = 210
+      const pageHeight = 297
+
+      const margin = 10
+
+      const printableWidth =
+        pageWidth - margin * 2
+
+      const printableHeight =
+        pageHeight - margin * 2
 
       /*
-       * Copy part of the invoice
-       * into the page canvas.
+       * Scale the captured invoice to the printable
+       * width of an A4 page.
        */
-      pageContext.drawImage(
-        canvas,
-        0,
-        sourceY,
-        canvas.width,
-        currentSourceHeight,
-        0,
-        0,
-        canvas.width,
-        currentSourceHeight
-      )
-
-      const pageRenderedHeight =
-        currentSourceHeight * scale
+      const scale =
+        printableWidth / canvas.width
 
       /*
-       * Add this section to PDF.
+       * Determine how much of the original canvas
+       * fits on one A4 page.
        */
-      pdf.addImage(
-        pageCanvas.toDataURL(
-          'image/png',
-          1
-        ),
-        'PNG',
-        margin,
-        margin,
-        printableWidth,
-        pageRenderedHeight,
-        undefined,
-        'FAST'
+      const sourcePageHeight =
+        printableHeight / scale
+
+      let sourceY = 0
+      let pageNumber = 0
+
+      /*
+       * Split long invoices across multiple A4 pages.
+       */
+      while (sourceY < canvas.height) {
+        /*
+         * Add another PDF page after the first page.
+         */
+        if (pageNumber > 0) {
+          pdf.addPage()
+        }
+
+        const remainingHeight =
+          canvas.height - sourceY
+
+        const currentSourceHeight =
+          Math.min(
+            sourcePageHeight,
+            remainingHeight
+          )
+
+        /*
+         * Create a temporary canvas for this PDF page.
+         */
+        const pageCanvas =
+          document.createElement('canvas')
+
+        pageCanvas.width = canvas.width
+
+        pageCanvas.height =
+          Math.ceil(currentSourceHeight)
+
+        const context =
+          pageCanvas.getContext('2d')
+
+        if (!context) {
+          console.error(
+            'Invoice PDF: could not create canvas context'
+          )
+
+          return undefined
+        }
+
+        /*
+         * White background.
+         */
+        context.fillStyle = '#ffffff'
+
+        context.fillRect(
+          0,
+          0,
+          pageCanvas.width,
+          pageCanvas.height
+        )
+
+        /*
+         * Copy the relevant part of the invoice
+         * into the page canvas.
+         */
+        context.drawImage(
+          canvas,
+          0,
+          sourceY,
+          canvas.width,
+          currentSourceHeight,
+          0,
+          0,
+          canvas.width,
+          currentSourceHeight
+        )
+
+        const renderedHeight =
+          currentSourceHeight * scale
+
+        /*
+         * JPEG keeps the generated PDF considerably
+         * smaller than a PNG-based PDF.
+         */
+        pdf.addImage(
+          pageCanvas.toDataURL(
+            'image/jpeg',
+            0.95
+          ),
+          'JPEG',
+          margin,
+          margin,
+          printableWidth,
+          renderedHeight,
+          undefined,
+          'FAST'
+        )
+
+        sourceY += currentSourceHeight
+        pageNumber += 1
+      }
+
+      /*
+       * Generate the final PDF blob.
+       */
+      const blob = pdf.output('blob')
+
+      if (!blob || blob.size === 0) {
+        console.error(
+          'Invoice PDF: generated empty PDF'
+        )
+
+        return undefined
+      }
+
+      console.log(
+        `Invoice PDF created successfully: ${blob.size} bytes`
       )
 
-      sourceY +=
-        currentSourceHeight
+      return blob
+    } catch (error) {
+      console.error(
+        'Invoice PDF generation failed:',
+        error
+      )
 
-      pageNumber += 1
+      return undefined
     }
-
-    return pdf.output('blob')
   }
 
   /*
-   * ============================================================
+   * ==========================================================
    * DOWNLOAD PDF
-   * ============================================================
+   * ==========================================================
    */
   async function downloadPdf() {
-    const pdf = await createPdf()
+    try {
+      setShareMessage('Preparing invoice PDF…')
 
-    if (!pdf || !invoice) {
-      return
+      const pdf = await createPdf()
+
+      if (!pdf || !invoice) {
+        setShareMessage(
+          'Could not create the invoice PDF. Please try again.'
+        )
+
+        return
+      }
+
+      const url =
+        URL.createObjectURL(pdf)
+
+      const link =
+        document.createElement('a')
+
+      link.href = url
+
+      link.download =
+        `${invoice.invoice_number}.pdf`
+
+      document.body.appendChild(link)
+
+      link.click()
+
+      link.remove()
+
+      /*
+       * Give the browser time to start the download
+       * before releasing the object URL.
+       */
+      setTimeout(() => {
+        URL.revokeObjectURL(url)
+      }, 1000)
+
+      setShareMessage(
+        'Invoice PDF downloaded successfully.'
+      )
+    } catch (error) {
+      console.error(
+        'Invoice PDF download failed:',
+        error
+      )
+
+      setShareMessage(
+        'Could not download the invoice PDF.'
+      )
     }
-
-    const url =
-      URL.createObjectURL(pdf)
-
-    const link =
-      document.createElement('a')
-
-    link.href = url
-
-    link.download =
-      `${invoice.invoice_number}.pdf`
-
-    document.body.appendChild(link)
-
-    link.click()
-
-    link.remove()
-
-    URL.revokeObjectURL(url)
   }
 
   /*
-   * ============================================================
+   * ==========================================================
    * SHARE PDF
-   * ============================================================
+   * ==========================================================
    */
   async function handleSend() {
     if (!invoice) return
@@ -461,8 +482,7 @@ export function InvoiceDetail() {
     setShareMessage('')
 
     try {
-      const pdf =
-        await createPdf()
+      const pdf = await createPdf()
 
       if (!pdf) {
         setShareMessage(
@@ -472,16 +492,15 @@ export function InvoiceDetail() {
         return
       }
 
-      const file =
-        new File(
-          [pdf],
-          `${invoice.invoice_number}.pdf`,
-          {
-            type: 'application/pdf',
-          }
-        )
+      const file = new File(
+        [pdf],
+        `${invoice.invoice_number}.pdf`,
+        {
+          type: 'application/pdf',
+        }
+      )
 
-      const shareData = {
+      const shareData: ShareData = {
         title:
           `Invoice ${invoice.invoice_number}`,
 
@@ -495,15 +514,15 @@ export function InvoiceDetail() {
       }
 
       /*
-       * Mobile browsers that support
+       * Check whether the browser supports
        * native file sharing.
        */
       if (
-        navigator.share &&
-        (!navigator.canShare ||
-          navigator.canShare(
-            shareData
-          ))
+        typeof navigator.share === 'function' &&
+        (
+          typeof navigator.canShare !== 'function' ||
+          navigator.canShare(shareData)
+        )
       ) {
         await navigator.share(
           shareData
@@ -514,70 +533,80 @@ export function InvoiceDetail() {
         )
       } else {
         /*
-         * Desktop browsers normally
-         * download the PDF.
+         * Desktop browsers that don't support
+         * navigator.share will download the PDF.
          */
-        await downloadPdf()
+        const url =
+          URL.createObjectURL(pdf)
+
+        const link =
+          document.createElement('a')
+
+        link.href = url
+
+        link.download =
+          `${invoice.invoice_number}.pdf`
+
+        document.body.appendChild(link)
+
+        link.click()
+
+        link.remove()
+
+        setTimeout(() => {
+          URL.revokeObjectURL(url)
+        }, 1000)
 
         setShareMessage(
-          'Your browser downloaded the PDF. Attach it in the app you want to use.'
+          'Your browser does not support direct sharing. The PDF was downloaded instead.'
         )
       }
     } catch (error) {
       /*
-       * User cancelled native share.
+       * User cancelled the native share dialog.
        */
       if (
-        !(
-          error instanceof
-            DOMException &&
-          error.name ===
-            'AbortError'
-        )
+        error instanceof DOMException &&
+        error.name === 'AbortError'
       ) {
-        setShareMessage(
-          'Could not open sharing. Please try downloading the PDF instead.'
-        )
+        setShareMessage('')
+        return
       }
+
+      console.error(
+        'Invoice sharing failed:',
+        error
+      )
+
+      setShareMessage(
+        'Could not open sharing. Please try downloading the PDF instead.'
+      )
     } finally {
       setSharing(false)
     }
   }
 
-  /*
-   * ============================================================
-   * PAGE
-   * ============================================================
-   */
-
   return (
     <div className="min-h-screen pb-8 bg-[color:var(--color-paper)]">
 
-      {/* ======================================================
-          TOP HEADER
-          ====================================================== */}
+      {/* =====================================================
+          HEADER
+          ===================================================== */}
 
       <header className="sticky top-0 z-20 bg-[color:var(--color-paper)]/95 backdrop-blur border-b border-[#E7E2D6]">
-
         <div className="max-w-lg mx-auto px-4 py-4 flex items-center justify-between">
 
           <div className="flex items-center gap-3">
 
             <button
-              onClick={() =>
-                navigate(-1)
-              }
+              onClick={() => navigate(-1)}
               className="text-slate-500"
             >
-              <ArrowLeft
-                size={20}
-              />
+              <ArrowLeft size={20} />
             </button>
 
             <h1 className="font-display text-lg font-semibold font-mono-tab">
-              {
-                invoice.invoice_number
-              }
+              {invoice.invoice_number}
             </h1>
 
           </div>
@@ -587,32 +616,25 @@ export function InvoiceDetail() {
             <Link
               to={`/invoices/${invoice.id}/edit`}
             >
-              <Pencil
-                size={18}
-              />
+              <Pencil size={18} />
             </Link>
 
             <button
-              onClick={
-                handleDelete
-              }
+              onClick={handleDelete}
             >
-              <Trash2
-                size={18}
-              />
+              <Trash2 size={18} />
             </button>
 
           </div>
 
         </div>
-
       </header>
 
       <div className="max-w-lg mx-auto px-4 pt-4">
 
-        {/* ====================================================
-            INVOICE PREVIEW
-            ==================================================== */}
+        {/* =====================================================
+            DOCUMENT PREVIEW
+            ===================================================== */}
 
         <div
           ref={invoiceRef}
@@ -620,9 +642,9 @@ export function InvoiceDetail() {
           className="ledger-card p-5 mb-5 bg-white"
         >
 
-          {/* ==================================================
-              BUSINESS HEADER
-              ================================================== */}
+          {/* ===================================================
+              BRANDED HEADER
+              =================================================== */}
 
           <div className="flex justify-between items-start gap-4 mb-6">
 
@@ -632,7 +654,6 @@ export function InvoiceDetail() {
                 <img
                   src={logoUrl}
                   alt="Business logo"
-                  crossOrigin="anonymous"
                   className="w-10 h-10 object-contain shrink-0"
                 />
               )}
@@ -641,33 +662,25 @@ export function InvoiceDetail() {
 
                 {meta.business_name && (
                   <p className="font-semibold text-sm leading-tight">
-                    {
-                      meta.business_name
-                    }
+                    {meta.business_name}
                   </p>
                 )}
 
                 {meta.business_address && (
                   <p className="text-[11px] text-slate-500 whitespace-pre-line leading-snug">
-                    {
-                      meta.business_address
-                    }
+                    {meta.business_address}
                   </p>
                 )}
 
                 {meta.business_phone && (
                   <p className="text-[11px] text-slate-500 leading-snug">
-                    {
-                      meta.business_phone
-                    }
+                    {meta.business_phone}
                   </p>
                 )}
 
                 {meta.business_email && (
                   <p className="text-[11px] text-slate-500 leading-snug break-all">
-                    {
-                      meta.business_email
-                    }
+                    {meta.business_email}
                   </p>
                 )}
 
@@ -681,9 +694,9 @@ export function InvoiceDetail() {
 
           </div>
 
-          {/* ==================================================
-              BILL TO + INVOICE INFORMATION
-              ================================================== */}
+          {/* ===================================================
+              BILL TO + INVOICE META
+              =================================================== */}
 
           <div className="flex justify-between gap-4 mb-5">
 
@@ -694,25 +707,18 @@ export function InvoiceDetail() {
               </p>
 
               <p className="font-semibold text-sm">
-                {
-                  invoice.client
-                    ?.name
-                }
+                {invoice.client?.name}
               </p>
 
               {invoice.client?.address && (
                 <p className="text-xs text-slate-500 whitespace-pre-line">
-                  {
-                    invoice.client.address
-                  }
+                  {invoice.client.address}
                 </p>
               )}
 
               {invoice.client?.phone && (
                 <p className="text-xs text-slate-500">
-                  {
-                    invoice.client.phone
-                  }
+                  {invoice.client.phone}
                 </p>
               )}
 
@@ -727,9 +733,7 @@ export function InvoiceDetail() {
                 </span>
 
                 <span className="text-right text-slate-500 font-mono-tab">
-                  {
-                    invoice.invoice_number
-                  }
+                  {invoice.invoice_number}
                 </span>
 
                 <span className="font-bold tracking-wide text-slate-900">
@@ -764,13 +768,11 @@ export function InvoiceDetail() {
 
           </div>
 
-          {/* ==================================================
-              ITEMS TABLE
-              ================================================== */}
+          {/* ===================================================
+              LINE ITEMS
+              =================================================== */}
 
           <div className="rounded-md overflow-hidden border border-[#E7E2D6]">
-
-            {/* Table header */}
 
             <div className="bg-[color:var(--color-ledger)] text-white text-[10px] sm:text-[11px] font-semibold grid grid-cols-[minmax(0,1fr)_32px_56px_68px] sm:grid-cols-[minmax(0,1fr)_44px_76px_92px] gap-1 sm:gap-2 px-2 sm:px-3 py-2">
 
@@ -792,55 +794,41 @@ export function InvoiceDetail() {
 
             </div>
 
-            {/* Items */}
+            {items.map((item, i) => (
+              <div
+                key={item.id}
+                className={`grid grid-cols-[minmax(0,1fr)_32px_56px_68px] sm:grid-cols-[minmax(0,1fr)_44px_76px_92px] gap-1 sm:gap-2 px-2 sm:px-3 py-2 text-[10px] sm:text-xs ${
+                  i % 2 === 1
+                    ? 'bg-[#F5F7FB]'
+                    : 'bg-white'
+                }`}
+              >
 
-            {items.map(
-              (item, i) => (
-                <div
-                  key={item.id}
-                  className={`grid grid-cols-[minmax(0,1fr)_32px_56px_68px] sm:grid-cols-[minmax(0,1fr)_44px_76px_92px] gap-1 sm:gap-2 px-2 sm:px-3 py-2 text-[10px] sm:text-xs ${
-                    i % 2 === 1
-                      ? 'bg-[#F5F7FB]'
-                      : 'bg-white'
-                  }`}
-                >
+                <span className="truncate">
+                  {item.description}
+                </span>
 
-                  <span className="truncate">
-                    {
-                      item.description
-                    }
-                  </span>
+                <span className="font-mono-tab text-center text-slate-600">
+                  {item.quantity}
+                </span>
 
-                  <span className="font-mono-tab text-center text-slate-600">
-                    {
-                      item.quantity
-                    }
-                  </span>
+                <span className="font-mono-tab text-right text-slate-600">
+                  {formatMoney(item.rate)}
+                </span>
 
-                  <span className="font-mono-tab text-right text-slate-600">
-                    {
-                      formatMoney(
-                        item.rate
-                      )
-                    }
-                  </span>
+                <span className="font-mono-tab text-right">
+                  {formatMoney(
+                    item.quantity *
+                    item.rate
+                  )}
+                </span>
 
-                  <span className="font-mono-tab text-right">
-                    {
-                      formatMoney(
-                        item.quantity *
-                          item.rate
-                      )
-                    }
-                  </span>
+              </div>
+            ))}
 
-                </div>
-              )
-            )}
-
-            {/* ==================================================
+            {/* =================================================
                 TOTALS
-                ================================================== */}
+                ================================================= */}
 
             <div className="border-t border-[#E7E2D6] bg-white">
 
@@ -851,42 +839,32 @@ export function InvoiceDetail() {
                 </span>
 
                 <span className="font-mono-tab">
-                  {
-                    formatMoney(
-                      subtotal
-                    )
-                  }
+                  {formatMoney(subtotal)}
                 </span>
 
               </div>
 
-              {invoice.tax_rate >
-                0 && (
+              {invoice.tax_rate > 0 && (
                 <div className="flex justify-between px-3 py-1.5 text-xs text-slate-500">
 
                   <span>
-                    Tax (
-                    {
-                      invoice.tax_rate
-                    }
-                    %)
+                    Tax ({invoice.tax_rate}%)
                   </span>
 
                   <span className="font-mono-tab">
-                    {
-                      formatMoney(
-                        subtotal *
-                          (invoice.tax_rate /
-                            100)
+                    {formatMoney(
+                      subtotal *
+                      (
+                        invoice.tax_rate /
+                        100
                       )
-                    }
+                    )}
                   </span>
 
                 </div>
               )}
 
-              {invoice.discount >
-                0 && (
+              {invoice.discount > 0 && (
                 <div className="flex justify-between px-3 py-1.5 text-xs text-slate-500">
 
                   <span>
@@ -895,11 +873,9 @@ export function InvoiceDetail() {
 
                   <span className="font-mono-tab">
                     -
-                    {
-                      formatMoney(
-                        invoice.discount
-                      )
-                    }
+                    {formatMoney(
+                      invoice.discount
+                    )}
                   </span>
 
                 </div>
@@ -912,11 +888,7 @@ export function InvoiceDetail() {
                 </span>
 
                 <span className="font-mono-tab font-bold text-sm">
-                  {
-                    formatMoney(
-                      total
-                    )
-                  }
+                  {formatMoney(total)}
                 </span>
 
               </div>
@@ -925,15 +897,12 @@ export function InvoiceDetail() {
 
           </div>
 
-          {/* ==================================================
+          {/* ===================================================
               PAYMENT METHOD
-              ================================================== */}
+              =================================================== */}
 
-          {(
-            meta.business_payment_details ||
-            paid > 0
-          ) && (
-
+          {(meta.business_payment_details ||
+            paid > 0) && (
             <div className="mt-5">
 
               <p className="text-xs font-bold mb-1">
@@ -942,40 +911,26 @@ export function InvoiceDetail() {
 
               {meta.business_payment_details && (
                 <p className="text-[11px] text-slate-600 whitespace-pre-line leading-relaxed">
-                  {
-                    meta.business_payment_details
-                  }
+                  {meta.business_payment_details}
                 </p>
               )}
 
               {paid > 0 && (
                 <p className="text-[11px] text-[color:var(--color-good)] font-medium mt-1">
-                  {
-                    formatMoney(
-                      paid
-                    )
-                  } received ·{' '}
-                  {
-                    formatMoney(
-                      balance
-                    )
-                  } balance due
+                  {formatMoney(paid)} received ·{' '}
+                  {formatMoney(balance)} balance due
                 </p>
               )}
 
             </div>
-
           )}
 
-          {/* ==================================================
+          {/* ===================================================
               TERMS & CONDITIONS
-              ================================================== */}
+              =================================================== */}
 
-          {(
-            meta.business_terms ||
-            invoice.notes
-          ) && (
-
+          {(meta.business_terms ||
+            invoice.notes) && (
             <div className="mt-5">
 
               <p className="text-xs font-bold mb-1">
@@ -984,29 +939,24 @@ export function InvoiceDetail() {
 
               {meta.business_terms && (
                 <p className="text-[10px] text-slate-600 whitespace-pre-line leading-relaxed">
-                  {
-                    meta.business_terms
-                  }
+                  {meta.business_terms}
                 </p>
               )}
 
               {invoice.notes && (
                 <p className="text-[10px] text-slate-600 whitespace-pre-wrap leading-relaxed mt-1">
-                  {
-                    invoice.notes
-                  }
+                  {invoice.notes}
                 </p>
               )}
 
             </div>
-
           )}
 
         </div>
 
-        {/* ====================================================
+        {/* =====================================================
             STATUS SUMMARY
-            ==================================================== */}
+            ===================================================== */}
 
         <div className="mb-5">
 
@@ -1023,45 +973,30 @@ export function InvoiceDetail() {
                 'dd/MM/yyyy'
               )}
 
-              {status ===
-                'overdue' && (
+              {status === 'overdue' && (
                 <span className="text-[color:var(--color-bad)] font-medium">
                   {' '}
-                  ·{' '}
-                  {
-                    daysOverdue
-                  }
-                  d late
+                  · {daysOverdue}d late
                 </span>
               )}
 
             </p>
 
-            <StatusPill
-              status={status}
-            />
+            <StatusPill status={status} />
 
           </div>
 
           <p className="font-mono-tab text-3xl font-bold">
-            {
-              formatMoney(
-                total
-              )
-            }
+            {formatMoney(total)}
           </p>
 
           <div className="flex items-center justify-between mt-0.5">
 
             <p className="text-base font-medium">
-              {
-                invoice.client
-                  ?.name
-              }
+              {invoice.client?.name}
             </p>
 
-            {invoice.status ===
-              'draft' && (
+            {invoice.status === 'draft' && (
               <span className="rounded-full bg-[#EFEFEF] text-slate-500 text-xs font-medium px-2.5 py-1">
                 Not Sent
               </span>
@@ -1072,19 +1007,15 @@ export function InvoiceDetail() {
           {balance > 0 &&
             balance < total && (
               <p className="text-sm text-[color:var(--color-bad)] font-medium mt-0.5">
-                {
-                  formatMoney(
-                    balance
-                  )
-                } unpaid
+                {formatMoney(balance)} unpaid
               </p>
             )}
 
         </div>
 
-        {/* ====================================================
-            SHARE
-            ==================================================== */}
+        {/* =====================================================
+            PRIMARY ACTION
+            ===================================================== */}
 
         <button
           onClick={handleSend}
@@ -1092,9 +1023,7 @@ export function InvoiceDetail() {
           className="w-full rounded-xl bg-[color:var(--color-ledger)] text-white font-semibold py-3.5 text-sm mb-2 flex items-center justify-center gap-2 disabled:opacity-60"
         >
 
-          <Send
-            size={16}
-          />
+          <Send size={16} />
 
           {sharing
             ? 'Preparing PDF…'
@@ -1104,32 +1033,24 @@ export function InvoiceDetail() {
 
         {shareMessage && (
           <p className="text-center text-xs text-slate-500 mb-4">
-            {
-              shareMessage
-            }
+            {shareMessage}
           </p>
         )}
 
-        {/* ====================================================
+        {/* =====================================================
             SECONDARY ACTIONS
-            ==================================================== */}
+            ===================================================== */}
 
         <div className="grid grid-cols-4 gap-2 mb-5">
 
-          {/* Download */}
-
           <button
-            onClick={
-              downloadPdf
-            }
+            onClick={downloadPdf}
             className="flex flex-col items-center gap-1.5 py-2 text-xs font-medium text-slate-700"
           >
 
             <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
 
-              <Download
-                size={18}
-              />
+              <Download size={18} />
 
             </span>
 
@@ -1137,28 +1058,20 @@ export function InvoiceDetail() {
 
           </button>
 
-          {/* Print */}
-
           <button
-            onClick={() =>
-              window.print()
-            }
+            onClick={() => window.print()}
             className="flex flex-col items-center gap-1.5 py-2 text-xs font-medium text-slate-700"
           >
 
             <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
 
-              <Printer
-                size={18}
-              />
+              <Printer size={18} />
 
             </span>
 
             Print
 
           </button>
-
-          {/* Edit */}
 
           <Link
             to={`/invoices/${invoice.id}/edit`}
@@ -1167,17 +1080,13 @@ export function InvoiceDetail() {
 
             <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
 
-              <Pencil
-                size={18}
-              />
+              <Pencil size={18} />
 
             </span>
 
             Edit
 
           </Link>
-
-          {/* More */}
 
           <div className="relative">
 
@@ -1192,9 +1101,7 @@ export function InvoiceDetail() {
 
               <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
 
-                <MoreHorizontal
-                  size={18}
-                />
+                <MoreHorizontal size={18} />
 
               </span>
 
@@ -1206,15 +1113,11 @@ export function InvoiceDetail() {
               <div className="absolute right-0 top-full mt-1 z-10 bg-white border border-[#E7E2D6] rounded-lg shadow-lg py-1 w-36">
 
                 <button
-                  onClick={
-                    handleDelete
-                  }
+                  onClick={handleDelete}
                   className="w-full px-3 py-2 text-left text-xs font-medium text-[color:var(--color-bad)] flex items-center gap-2 hover:bg-[color:var(--color-bad-dim)]"
                 >
 
-                  <Trash2
-                    size={14}
-                  />
+                  <Trash2 size={14} />
 
                   Delete invoice
 
@@ -1227,34 +1130,27 @@ export function InvoiceDetail() {
 
         </div>
 
-        {/* ====================================================
+        {/* =====================================================
             RECORD PAYMENT
-            ==================================================== */}
+            ===================================================== */}
 
         {balance > 0 &&
           !showPayment && (
-
             <button
               onClick={() =>
-                setShowPayment(
-                  true
-                )
+                setShowPayment(true)
               }
               className="w-full rounded-lg border border-[color:var(--color-ledger)] text-[color:var(--color-ledger)] bg-white font-semibold py-3 text-sm mb-3 flex items-center justify-center gap-2"
             >
 
-              <Wallet
-                size={16}
-              />
+              <Wallet size={16} />
 
               Record payment
 
             </button>
-
           )}
 
         {showPayment && (
-
           <form
             onSubmit={
               handleRecordPayment
@@ -1278,18 +1174,13 @@ export function InvoiceDetail() {
                   type="number"
                   step="0.01"
                   max={balance}
-                  value={
-                    payAmount
-                  }
+                  value={payAmount}
                   onChange={(e) =>
                     setPayAmount(
-                      e.target
-                        .value
+                      e.target.value
                     )
                   }
-                  placeholder={balance.toFixed(
-                    2
-                  )}
+                  placeholder={balance.toFixed(2)}
                   className="w-full rounded-lg border border-[#E7E2D6] px-3 py-2 text-sm font-mono-tab"
                   required
                 />
@@ -1303,13 +1194,10 @@ export function InvoiceDetail() {
                 </label>
 
                 <select
-                  value={
-                    payMethod
-                  }
+                  value={payMethod}
                   onChange={(e) =>
                     setPayMethod(
-                      e.target
-                        .value
+                      e.target.value
                     )
                   }
                   className="w-full rounded-lg border border-[#E7E2D6] px-3 py-2 text-sm bg-white"
@@ -1342,9 +1230,7 @@ export function InvoiceDetail() {
               <button
                 type="button"
                 onClick={() =>
-                  setShowPayment(
-                    false
-                  )
+                  setShowPayment(false)
                 }
                 className="flex-1 rounded-lg border border-[#E7E2D6] py-2.5 text-sm font-medium"
               >
@@ -1366,7 +1252,6 @@ export function InvoiceDetail() {
             </div>
 
           </form>
-
         )}
 
       </div>
