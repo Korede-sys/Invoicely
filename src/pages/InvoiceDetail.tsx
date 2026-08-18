@@ -20,6 +20,8 @@ export function InvoiceDetail() {
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState('Bank transfer')
   const [saving, setSaving] = useState(false)
+  const [sharing, setSharing] = useState(false)
+  const [shareMessage, setShareMessage] = useState('')
 
   async function load() {
     if (!id) return
@@ -63,16 +65,6 @@ export function InvoiceDetail() {
     }
   }
 
-  function handleSend() {
-    const business = meta.business_name || 'Invoice'
-    const subject = encodeURIComponent(`Invoice ${invoice!.invoice_number} from ${business}`)
-    const body = encodeURIComponent(
-      `Hello ${invoice!.client?.name ?? ''},\n\nPlease find your invoice ${invoice!.invoice_number} for ${formatMoney(total)}, due ${format(parseISO(invoice!.due_date), 'dd/MM/yyyy')}.\n\nThank you.`
-    )
-    const to = invoice!.client?.email ?? ''
-    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`
-  }
-
   async function loadImageAsDataUrl(url: string): Promise<{ dataUrl: string; format: 'PNG' | 'JPEG'; width: number; height: number } | null> {
     try {
       const res = await fetch(url)
@@ -95,13 +87,13 @@ export function InvoiceDetail() {
     }
   }
 
-  async function downloadPdf() {
+  async function createPdf(): Promise<Blob | undefined> {
     if (!invoice) return
     const doc = new jsPDF({ unit: 'mm', format: 'a4' })
     const marginX = 14
     const pageWidth = 210
     const pageHeight = 297
-    const bottomLimit = pageHeight - 18 // leave room for footer/page number
+    const bottomLimit = pageHeight - 18
     let page = 1
     let y = 20
 
@@ -123,16 +115,14 @@ export function InvoiceDetail() {
       doc.setFontSize(9)
       doc.setFont('helvetica', 'bold')
       doc.text('Description', marginX + 2, y + 5.5)
-      doc.text('Qty', 130, y + 5.5)
-      doc.text('Rate', 150, y + 5.5)
+      doc.text('Qty', 128, y + 5.5)
+      doc.text('Price', 152, y + 5.5)
       doc.text('Amount', pageWidth - marginX, y + 5.5, { align: 'right' })
       doc.setTextColor(0, 0, 0)
       doc.setFont('helvetica', 'normal')
       y += 8
     }
 
-    // ensureSpace adds a new page (repeating the table header) if the next
-    // block of `needed` mm would overflow the printable area.
     function ensureSpace(needed: number, opts?: { repeatTableHeader?: boolean }) {
       if (y + needed <= bottomLimit) return
       drawFooter()
@@ -150,50 +140,78 @@ export function InvoiceDetail() {
     let titleX = marginX
     if (logo) {
       const logoHeight = 14
-      const logoWidth = (logo.width / logo.height) * logoHeight
+      const logoWidth = Math.min(42, (logo.width / logo.height) * logoHeight)
       doc.addImage(logo.dataUrl, logo.format, marginX, y - 10, logoWidth, logoHeight)
       titleX = marginX + logoWidth + 5
     }
 
+    const businessLines = [meta.business_name, meta.business_address, meta.business_phone, meta.business_email].filter(Boolean)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8)
+    doc.setTextColor(90, 100, 115)
+    doc.text(doc.splitTextToSize(businessLines.join('\n'), 70), titleX, y - 10)
+    doc.setTextColor(0, 0, 0)
     doc.setFontSize(18)
     doc.setFont('helvetica', 'bold')
-    doc.text('INVOICE', titleX, y)
-    doc.setFontSize(10)
-    doc.setFont('helvetica', 'normal')
-    doc.text(invoice.invoice_number, pageWidth - marginX, y, { align: 'right' })
+    doc.text('INVOICE', pageWidth - marginX, y, { align: 'right' })
 
-    y += 12
+    y += 16
     const billToStartY = y
-    doc.setFontSize(10)
-    doc.text('Bill to', marginX, y)
+    doc.setFontSize(8)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(36, 84, 255)
+    doc.text('BILL TO', marginX, y)
     y += 5
     doc.setFont('helvetica', 'bold')
+    doc.setTextColor(0, 0, 0)
+    doc.setFontSize(10)
     doc.text(invoice.client?.name ?? '', marginX, y)
     doc.setFont('helvetica', 'normal')
     if (invoice.client?.address) {
       y += 5
-      doc.text(doc.splitTextToSize(invoice.client.address, 90), marginX, y)
+      const addressLines = doc.splitTextToSize(invoice.client.address, 82)
+      doc.setFontSize(8)
+      doc.setTextColor(90, 100, 115)
+      doc.text(addressLines, marginX, y)
+      doc.setTextColor(0, 0, 0)
+      y += Math.max(0, addressLines.length - 1) * 3.8
     }
     if (invoice.client?.phone) {
       y += 5
+      doc.setFontSize(8)
+      doc.setTextColor(90, 100, 115)
       doc.text(invoice.client.phone, marginX, y)
+      doc.setTextColor(0, 0, 0)
     }
 
-    doc.text(`Issue date: ${format(parseISO(invoice.issue_date), 'dd/MM/yyyy')}`, pageWidth - marginX, billToStartY, { align: 'right' })
-    doc.text(`Due date: ${format(parseISO(invoice.due_date), 'dd/MM/yyyy')}`, pageWidth - marginX, billToStartY + 5, { align: 'right' })
+    doc.setFontSize(8)
+    doc.setFont('helvetica', 'bold')
+    doc.text('INVOICE #', 145, billToStartY)
+    doc.text('DATE', 145, billToStartY + 5)
+    doc.text('DUE DATE', 145, billToStartY + 10)
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(90, 100, 115)
+    doc.text(invoice.invoice_number, pageWidth - marginX, billToStartY, { align: 'right' })
+    doc.text(format(parseISO(invoice.issue_date), 'dd/MM/yyyy'), pageWidth - marginX, billToStartY + 5, { align: 'right' })
+    doc.text(format(parseISO(invoice.due_date), 'dd/MM/yyyy'), pageWidth - marginX, billToStartY + 10, { align: 'right' })
+    doc.setTextColor(0, 0, 0)
 
-    y = Math.max(y, billToStartY + 5) + 10
+    y = Math.max(y, billToStartY + 10) + 10
     drawTableHeader()
 
     for (const item of items) {
-      ensureSpace(7, { repeatTableHeader: true })
-      y += 7
-      const lines = doc.splitTextToSize(item.description, 108)
+      const lines = doc.splitTextToSize(item.description, 102)
+      const rowHeight = Math.max(7, lines.length * 4.5 + 3)
+      ensureSpace(rowHeight, { repeatTableHeader: true })
+      doc.setFillColor(248, 250, 255)
+      doc.rect(marginX, y, pageWidth - marginX * 2, rowHeight, 'F')
+      y += 5
+      doc.setFontSize(9)
       doc.text(lines, marginX + 2, y)
-      doc.text(String(item.quantity), 130, y)
-      doc.text(formatMoney(item.rate), 150, y)
+      doc.text(String(item.quantity), 128, y)
+      doc.text(formatMoney(item.rate), 152, y)
       doc.text(formatMoney(item.quantity * item.rate), pageWidth - marginX, y, { align: 'right' })
-      if (lines.length > 1) y += (lines.length - 1) * 4.5
+      y += rowHeight - 5
     }
 
     const totalsBlockHeight = 10 + 6 + (invoice.tax_rate > 0 ? 6 : 0) + (invoice.discount > 0 ? 6 : 0) + (paidAmt > 0 ? 12 : 0)
@@ -228,19 +246,77 @@ export function InvoiceDetail() {
       doc.setTextColor(0, 0, 0)
     }
 
-    if (invoice.notes) {
-      const noteLines = doc.splitTextToSize(invoice.notes, pageWidth - marginX * 2)
-      ensureSpace(10 + noteLines.length * 4.5)
+    const paymentDetails = meta.business_payment_details
+    const terms = [meta.business_terms, invoice.notes].filter(Boolean).join('\n')
+    if (paymentDetails || terms) {
+      const paymentLines = paymentDetails ? doc.splitTextToSize(paymentDetails, 85) : []
+      const termLines = terms ? doc.splitTextToSize(terms, 85) : []
+      const detailsHeight = Math.max(paymentLines.length, termLines.length) * 4 + 14
+      ensureSpace(detailsHeight)
       y += 14
       doc.setFont('helvetica', 'normal')
-      doc.setFontSize(9)
-      doc.text('Notes', marginX, y)
-      y += 5
-      doc.text(noteLines, marginX, y)
+      doc.setFontSize(8)
+      if (paymentLines.length) {
+        doc.setFont('helvetica', 'bold')
+        doc.text('PAYMENT METHOD', marginX, y)
+        doc.setFont('helvetica', 'normal')
+        doc.setTextColor(90, 100, 115)
+        doc.text(paymentLines, marginX, y + 5)
+        doc.setTextColor(0, 0, 0)
+      }
+      if (termLines.length) {
+        const columnX = paymentLines.length ? 112 : marginX
+        doc.setFont('helvetica', 'bold')
+        doc.text('TERMS & CONDITIONS', columnX, y)
+        doc.setFont('helvetica', 'normal')
+        doc.setTextColor(90, 100, 115)
+        doc.text(termLines, columnX, y + 5)
+        doc.setTextColor(0, 0, 0)
+      }
     }
 
     drawFooter()
-    doc.save(`${invoice.invoice_number}.pdf`)
+    return doc.output('blob')
+  }
+
+  async function downloadPdf() {
+    const pdf = await createPdf()
+    if (!pdf || !invoice) return
+    const url = URL.createObjectURL(pdf)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${invoice.invoice_number}.pdf`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function handleSend() {
+    if (!invoice) return
+    setSharing(true)
+    setShareMessage('')
+    try {
+      const pdf = await createPdf()
+      if (!pdf) return
+      const file = new File([pdf], `${invoice.invoice_number}.pdf`, { type: 'application/pdf' })
+      const shareData = {
+        title: `Invoice ${invoice.invoice_number}`,
+        text: `Invoice ${invoice.invoice_number} from ${meta.business_name || 'your business'} — ${formatMoney(total)}.`,
+        files: [file],
+      }
+      if (navigator.share && (!navigator.canShare || navigator.canShare(shareData))) {
+        await navigator.share(shareData)
+        setShareMessage('Invoice PDF is ready to share.')
+      } else {
+        await downloadPdf()
+        setShareMessage('Your browser downloaded the PDF. Attach it in the app you want to use.')
+      }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        setShareMessage('Could not open sharing. Please try downloading the PDF instead.')
+      }
+    } finally {
+      setSharing(false)
+    }
   }
 
   return (
@@ -303,14 +379,14 @@ export function InvoiceDetail() {
 
           {/* Line items */}
           <div className="rounded-md overflow-hidden border border-[#E7E2D6]">
-            <div className="bg-[color:var(--color-ledger)] text-white text-[11px] font-semibold grid grid-cols-[1fr_44px_76px_92px] gap-2 px-3 py-2">
+            <div className="bg-[color:var(--color-ledger)] text-white text-[10px] sm:text-[11px] font-semibold grid grid-cols-[minmax(0,1fr)_32px_56px_68px] sm:grid-cols-[minmax(0,1fr)_44px_76px_92px] gap-1 sm:gap-2 px-2 sm:px-3 py-2">
               <span>Description</span>
               <span className="text-center">QTY</span>
               <span className="text-right">Price</span>
               <span className="text-right">Amount</span>
             </div>
             {items.map((item, i) => (
-              <div key={item.id} className={`grid grid-cols-[1fr_44px_76px_92px] gap-2 px-3 py-2 text-xs ${i % 2 === 1 ? 'bg-[#F5F7FB]' : 'bg-white'}`}>
+              <div key={item.id} className={`grid grid-cols-[minmax(0,1fr)_32px_56px_68px] sm:grid-cols-[minmax(0,1fr)_44px_76px_92px] gap-1 sm:gap-2 px-2 sm:px-3 py-2 text-[10px] sm:text-xs ${i % 2 === 1 ? 'bg-[#F5F7FB]' : 'bg-white'}`}>
                 <span className="truncate">{item.description}</span>
                 <span className="font-mono-tab text-center text-slate-600">{item.quantity}</span>
                 <span className="font-mono-tab text-right text-slate-600">{formatMoney(item.rate)}</span>
@@ -391,10 +467,12 @@ export function InvoiceDetail() {
         {/* Primary action */}
         <button
           onClick={handleSend}
-          className="w-full rounded-xl bg-[color:var(--color-ledger)] text-white font-semibold py-3.5 text-sm mb-4 flex items-center justify-center gap-2"
+          disabled={sharing}
+          className="w-full rounded-xl bg-[color:var(--color-ledger)] text-white font-semibold py-3.5 text-sm mb-2 flex items-center justify-center gap-2 disabled:opacity-60"
         >
-          <Send size={16} /> Send Invoice
+          <Send size={16} /> {sharing ? 'Preparing PDF…' : 'Share invoice PDF'}
         </button>
+        {shareMessage && <p className="text-center text-xs text-slate-500 mb-4">{shareMessage}</p>}
 
         {/* Secondary actions */}
         <div className="grid grid-cols-4 gap-2 mb-5">
