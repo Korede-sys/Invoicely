@@ -59,7 +59,6 @@ export function InvoiceDetail() {
   const [payMethod, setPayMethod] = useState('Bank transfer')
   const [saving, setSaving] = useState(false)
   const [sharing, setSharing] = useState(false)
-  const [downloading, setDownloading] = useState(false)
   const [shareMessage, setShareMessage] = useState('')
 
   const load = useCallback(async () => {
@@ -82,6 +81,7 @@ export function InvoiceDetail() {
   }
 
   const items = invoice.items ?? []
+
   const subtotal = invoiceSubtotal(items)
 
   const total = invoiceTotal(
@@ -91,7 +91,9 @@ export function InvoiceDetail() {
   )
 
   const paid = amountPaid(invoice.payments ?? [])
+
   const balance = Math.max(0, total - paid)
+
   const status = deriveStatus(invoice)
 
   const daysOverdue = differenceInCalendarDays(
@@ -108,6 +110,7 @@ export function InvoiceDetail() {
     }
 
     await deleteInvoice(id)
+
     navigate('/')
   }
 
@@ -147,9 +150,12 @@ export function InvoiceDetail() {
    * CREATE PDF
    * ==========================================================
    *
-   * The actual invoice preview is captured directly.
-   * This means the PDF keeps the same invoice items,
-   * layout, branding and totals shown on screen.
+   * The PDF is generated directly from the invoice preview.
+   *
+   * IMPORTANT:
+   * We deliberately capture only invoiceRef.
+   * This means buttons, status, Download, Share, Edit etc.
+   * are NOT included in the PDF.
    */
   async function createPdf(): Promise<jsPDF | null> {
     const element = invoiceRef.current
@@ -159,25 +165,21 @@ export function InvoiceDetail() {
     }
 
     /*
-     * Wait for fonts to finish loading.
+     * Wait until browser fonts are ready.
      */
     if (document.fonts?.ready) {
       await document.fonts.ready
     }
 
     /*
-     * Wait for the browser to finish rendering.
+     * Wait one frame so images/layout finish rendering.
      */
     await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          resolve()
-        })
-      })
+      requestAnimationFrame(() => resolve())
     })
 
     /*
-     * Capture the visible invoice.
+     * Capture the exact invoice displayed on screen.
      */
     const canvas = await html2canvas(element, {
       scale: 2,
@@ -186,6 +188,7 @@ export function InvoiceDetail() {
       backgroundColor: '#ffffff',
       logging: false,
       imageTimeout: 15000,
+      removeContainer: true,
     })
 
     const pdf = new jsPDF({
@@ -200,29 +203,29 @@ export function InvoiceDetail() {
 
     const margin = 10
 
-    const printableWidth = pageWidth - margin * 2
-    const printableHeight = pageHeight - margin * 2
+    const printableWidth =
+      pageWidth - margin * 2
+
+    const printableHeight =
+      pageHeight - margin * 2
 
     /*
      * Scale captured invoice to fit A4 width.
      */
-    const scale = printableWidth / canvas.width
+    const scale =
+      printableWidth / canvas.width
 
-    const renderedHeight = canvas.height * scale
+    const renderedHeight =
+      canvas.height * scale
 
     /*
-     * ----------------------------------------------------------
+     * ==========================================================
      * ONE PAGE
-     * ----------------------------------------------------------
+     * ==========================================================
      */
     if (renderedHeight <= printableHeight) {
-      const imageData = canvas.toDataURL(
-        'image/jpeg',
-        0.95
-      )
-
       pdf.addImage(
-        imageData,
+        canvas.toDataURL('image/jpeg', 0.95),
         'JPEG',
         margin,
         margin,
@@ -236,13 +239,16 @@ export function InvoiceDetail() {
     }
 
     /*
-     * ----------------------------------------------------------
-     * MULTI-PAGE
-     * ----------------------------------------------------------
+     * ==========================================================
+     * MULTIPLE PAGES
+     * ==========================================================
      *
-     * Long invoices are split across A4 pages while keeping
-     * the exact same captured invoice design.
+     * We split the exact screenshot into A4 pages.
+     *
+     * We do NOT rebuild the invoice.
+     * Therefore the PDF keeps the same visual design.
      */
+
     const sourcePageHeight =
       printableHeight / scale
 
@@ -257,18 +263,19 @@ export function InvoiceDetail() {
       const remainingHeight =
         canvas.height - sourceY
 
-      const currentSourceHeight = Math.min(
-        sourcePageHeight,
-        remainingHeight
-      )
+      const currentSourceHeight =
+        Math.min(
+          sourcePageHeight,
+          remainingHeight
+        )
 
       const pageCanvas =
         document.createElement('canvas')
 
       pageCanvas.width = canvas.width
-      pageCanvas.height = Math.ceil(
-        currentSourceHeight
-      )
+
+      pageCanvas.height =
+        Math.ceil(currentSourceHeight)
 
       const pageContext =
         pageCanvas.getContext('2d')
@@ -277,6 +284,9 @@ export function InvoiceDetail() {
         return null
       }
 
+      /*
+       * White background.
+       */
       pageContext.fillStyle = '#ffffff'
 
       pageContext.fillRect(
@@ -286,6 +296,9 @@ export function InvoiceDetail() {
         pageCanvas.height
       )
 
+      /*
+       * Copy the correct portion of the invoice.
+       */
       pageContext.drawImage(
         canvas,
         0,
@@ -298,16 +311,11 @@ export function InvoiceDetail() {
         currentSourceHeight
       )
 
-      const pageImage = pageCanvas.toDataURL(
-        'image/jpeg',
-        0.95
-      )
-
       const pageRenderedHeight =
         currentSourceHeight * scale
 
       pdf.addImage(
-        pageImage,
+        pageCanvas.toDataURL('image/jpeg', 0.95),
         'JPEG',
         margin,
         margin,
@@ -318,6 +326,7 @@ export function InvoiceDetail() {
       )
 
       sourceY += currentSourceHeight
+
       pageNumber += 1
     }
 
@@ -330,12 +339,11 @@ export function InvoiceDetail() {
    * ==========================================================
    *
    * Uses jsPDF.save() directly.
-   * This avoids the Blob/ObjectURL download issue.
+   * This is more reliable than creating a temporary Blob URL.
    */
   async function downloadPdf() {
-    if (!invoice || downloading) return
+    if (!invoice) return
 
-    setDownloading(true)
     setShareMessage('')
 
     try {
@@ -349,6 +357,9 @@ export function InvoiceDetail() {
         return
       }
 
+      /*
+       * Direct browser download.
+       */
       pdf.save(
         `${invoice.invoice_number}.pdf`
       )
@@ -358,15 +369,13 @@ export function InvoiceDetail() {
       )
     } catch (error) {
       console.error(
-        'Invoice PDF download error:',
+        'PDF download error:',
         error
       )
 
       setShareMessage(
         'Could not download the PDF. Please try again.'
       )
-    } finally {
-      setDownloading(false)
     }
   }
 
@@ -374,9 +383,14 @@ export function InvoiceDetail() {
    * ==========================================================
    * SHARE PDF
    * ==========================================================
+   *
+   * Uses Web Share API when supported.
+   *
+   * If the browser cannot share files, we automatically
+   * download the PDF instead.
    */
   async function handleSend() {
-    if (!invoice || sharing) return
+    if (!invoice) return
 
     setSharing(true)
     setShareMessage('')
@@ -393,12 +407,15 @@ export function InvoiceDetail() {
       }
 
       /*
-       * Convert the generated PDF into a Blob.
+       * Get the PDF as a Blob.
        */
-      const pdfBlob = pdf.output('blob')
+      const blob = pdf.output('blob')
 
+      /*
+       * Convert Blob into a File.
+       */
       const file = new File(
-        [pdfBlob],
+        [blob],
         `${invoice.invoice_number}.pdf`,
         {
           type: 'application/pdf',
@@ -406,44 +423,44 @@ export function InvoiceDetail() {
       )
 
       const shareData: ShareData = {
-        title: `Invoice ${invoice.invoice_number}`,
-        text: `Invoice ${invoice.invoice_number} from ${
-          meta.business_name || 'your business'
-        } — ${formatMoney(total)}.`,
+        title:
+          `Invoice ${invoice.invoice_number}`,
+
+        text:
+          `Invoice ${invoice.invoice_number} from ${
+            meta.business_name ||
+            'your business'
+          } — ${formatMoney(total)}.`,
+
         files: [file],
       }
 
       /*
-       * Native sharing.
+       * Check whether the browser supports
+       * file sharing.
        */
-      if (
-        typeof navigator.share === 'function'
-      ) {
-        let canShareFiles = true
+      const canShareFiles =
+        typeof navigator.share === 'function' &&
+        typeof navigator.canShare === 'function' &&
+        navigator.canShare({
+          files: [file],
+        })
 
-        if (
-          typeof navigator.canShare === 'function'
-        ) {
-          canShareFiles =
-            navigator.canShare({
-              files: [file],
-            })
-        }
+      if (canShareFiles) {
+        await navigator.share(shareData)
 
-        if (canShareFiles) {
-          await navigator.share(shareData)
+        setShareMessage(
+          'Invoice PDF is ready to share.'
+        )
 
-          setShareMessage(
-            'Invoice PDF is ready to share.'
-          )
-
-          return
-        }
+        return
       }
 
       /*
-       * If the browser does not support file sharing,
-       * download the same PDF directly.
+       * Some desktop browsers do not support
+       * navigator.share().
+       *
+       * In that case download automatically.
        */
       pdf.save(
         `${invoice.invoice_number}.pdf`
@@ -453,23 +470,49 @@ export function InvoiceDetail() {
         'Your browser does not support direct file sharing. The PDF has been downloaded.'
       )
     } catch (error) {
+      console.error(
+        'PDF share error:',
+        error
+      )
+
       /*
-       * User cancelled the native share dialog.
+       * User closing/canceling the share dialog
+       * should not show an error.
        */
       if (
         error instanceof DOMException &&
         error.name === 'AbortError'
       ) {
+        setShareMessage('')
         return
       }
 
-      console.error(
-        'Invoice PDF sharing error:',
-        error
-      )
+      /*
+       * If sharing fails, attempt direct download.
+       */
+      try {
+        const pdf = await createPdf()
+
+        if (pdf) {
+          pdf.save(
+            `${invoice.invoice_number}.pdf`
+          )
+
+          setShareMessage(
+            'Sharing was unavailable, so the PDF was downloaded instead.'
+          )
+
+          return
+        }
+      } catch (downloadError) {
+        console.error(
+          'Fallback PDF download error:',
+          downloadError
+        )
+      }
 
       setShareMessage(
-        'Could not open sharing. Please use Download instead.'
+        'Could not create or share the PDF. Please try again.'
       )
     } finally {
       setSharing(false)
@@ -500,7 +543,9 @@ export function InvoiceDetail() {
               <Pencil size={18} />
             </Link>
 
-            <button onClick={handleDelete}>
+            <button
+              onClick={handleDelete}
+            >
               <Trash2 size={18} />
             </button>
           </div>
@@ -510,7 +555,7 @@ export function InvoiceDetail() {
       <div className="max-w-lg mx-auto px-4 pt-4">
 
         {/* =====================================================
-            DOCUMENT PREVIEW
+            INVOICE DOCUMENT
             ===================================================== */}
 
         <div
@@ -625,7 +670,9 @@ export function InvoiceDetail() {
           {/* Line items */}
           <div className="rounded-md overflow-hidden border border-[#E7E2D6]">
             <div className="bg-[color:var(--color-ledger)] text-white text-[10px] sm:text-[11px] font-semibold grid grid-cols-[minmax(0,1fr)_32px_56px_68px] sm:grid-cols-[minmax(0,1fr)_44px_76px_92px] gap-1 sm:gap-2 px-2 sm:px-3 py-2">
-              <span>Description</span>
+              <span>
+                Description
+              </span>
 
               <span className="text-center">
                 QTY
@@ -663,7 +710,8 @@ export function InvoiceDetail() {
 
                 <span className="font-mono-tab text-right">
                   {formatMoney(
-                    item.quantity * item.rate
+                    item.quantity *
+                      item.rate
                   )}
                 </span>
               </div>
@@ -746,7 +794,7 @@ export function InvoiceDetail() {
             </div>
           )}
 
-          {/* Terms & conditions */}
+          {/* Terms */}
           {(meta.business_terms ||
             invoice.notes) && (
             <div className="mt-5">
@@ -818,7 +866,7 @@ export function InvoiceDetail() {
         </div>
 
         {/* =====================================================
-            PRIMARY ACTION
+            SHARE
             ===================================================== */}
 
         <button
@@ -846,16 +894,13 @@ export function InvoiceDetail() {
         <div className="grid grid-cols-4 gap-2 mb-5">
           <button
             onClick={downloadPdf}
-            disabled={downloading}
-            className="flex flex-col items-center gap-1.5 py-2 text-xs font-medium text-slate-700 disabled:opacity-60"
+            className="flex flex-col items-center gap-1.5 py-2 text-xs font-medium text-slate-700"
           >
             <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
               <Download size={18} />
             </span>
 
-            {downloading
-              ? 'Creating…'
-              : 'Download'}
+            Download
           </button>
 
           <button
