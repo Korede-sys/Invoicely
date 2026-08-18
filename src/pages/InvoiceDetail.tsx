@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type FormEvent,
 } from 'react'
 import {
   useNavigate,
@@ -49,14 +50,19 @@ export function InvoiceDetail() {
 
   const invoiceRef = useRef<HTMLDivElement | null>(null)
 
-  const meta = (user?.user_metadata ?? {}) as Record<string, string>
+  const meta = (user?.user_metadata ?? {}) as Record<
+    string,
+    string
+  >
+
   const logoUrl = meta.business_logo_url
 
   const [showMore, setShowMore] = useState(false)
   const [invoice, setInvoice] = useState<Invoice | null>(null)
   const [showPayment, setShowPayment] = useState(false)
   const [payAmount, setPayAmount] = useState('')
-  const [payMethod, setPayMethod] = useState('Bank transfer')
+  const [payMethod, setPayMethod] =
+    useState('Bank transfer')
   const [saving, setSaving] = useState(false)
   const [sharing, setSharing] = useState(false)
   const [shareMessage, setShareMessage] = useState('')
@@ -114,9 +120,7 @@ export function InvoiceDetail() {
     navigate('/')
   }
 
-  async function handleRecordPayment(
-    e: React.FormEvent
-  ) {
+  async function handleRecordPayment(e: FormEvent) {
     e.preventDefault()
 
     if (!id || !user) return
@@ -150,187 +154,492 @@ export function InvoiceDetail() {
    * CREATE PDF
    * ==========================================================
    *
-   * The PDF is generated directly from the invoice preview.
+   * Creates a PDF from the visible invoice.
    *
-   * IMPORTANT:
-   * We deliberately capture only invoiceRef.
-   * This means buttons, status, Download, Share, Edit etc.
-   * are NOT included in the PDF.
+   * The invoice is cloned into a temporary capture container.
+   * This prevents html2canvas from changing the visible page.
    */
   async function createPdf(): Promise<jsPDF | null> {
     const element = invoiceRef.current
 
     if (!element) {
+      console.error(
+        'Invoice preview element was not found.'
+      )
+
       return null
     }
 
-    /*
-     * Wait until browser fonts are ready.
-     */
-    if (document.fonts?.ready) {
-      await document.fonts.ready
-    }
+    let captureContainer: HTMLDivElement | null = null
 
-    /*
-     * Wait one frame so images/layout finish rendering.
-     */
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve())
-    })
-
-    /*
-     * Capture the exact invoice displayed on screen.
-     */
-    const canvas = await html2canvas(element, {
-      scale: 2,
-      useCORS: true,
-      allowTaint: false,
-      backgroundColor: '#ffffff',
-      logging: false,
-      imageTimeout: 15000,
-      removeContainer: true,
-    })
-
-    const pdf = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4',
-      compress: true,
-    })
-
-    const pageWidth = 210
-    const pageHeight = 297
-
-    const margin = 10
-
-    const printableWidth =
-      pageWidth - margin * 2
-
-    const printableHeight =
-      pageHeight - margin * 2
-
-    /*
-     * Scale captured invoice to fit A4 width.
-     */
-    const scale =
-      printableWidth / canvas.width
-
-    const renderedHeight =
-      canvas.height * scale
-
-    /*
-     * ==========================================================
-     * ONE PAGE
-     * ==========================================================
-     */
-    if (renderedHeight <= printableHeight) {
-      pdf.addImage(
-        canvas.toDataURL('image/jpeg', 0.95),
-        'JPEG',
-        margin,
-        margin,
-        printableWidth,
-        renderedHeight,
-        undefined,
-        'FAST'
-      )
-
-      return pdf
-    }
-
-    /*
-     * ==========================================================
-     * MULTIPLE PAGES
-     * ==========================================================
-     *
-     * We split the exact screenshot into A4 pages.
-     *
-     * We do NOT rebuild the invoice.
-     * Therefore the PDF keeps the same visual design.
-     */
-
-    const sourcePageHeight =
-      printableHeight / scale
-
-    let sourceY = 0
-    let pageNumber = 0
-
-    while (sourceY < canvas.height) {
-      if (pageNumber > 0) {
-        pdf.addPage()
+    try {
+      /*
+       * Wait until fonts are ready.
+       */
+      if (document.fonts?.ready) {
+        await document.fonts.ready
       }
 
-      const remainingHeight =
-        canvas.height - sourceY
+      /*
+       * Allow React/browser rendering to finish.
+       */
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve()
+          })
+        })
+      })
 
-      const currentSourceHeight =
-        Math.min(
-          sourcePageHeight,
-          remainingHeight
+      const rect =
+        element.getBoundingClientRect()
+
+      const width =
+        Math.max(
+          Math.ceil(rect.width),
+          element.scrollWidth
         )
 
-      const pageCanvas =
-        document.createElement('canvas')
+      /*
+       * Create a temporary container.
+       */
+      captureContainer =
+        document.createElement('div')
 
-      pageCanvas.width = canvas.width
+      captureContainer.style.position =
+        'fixed'
 
-      pageCanvas.height =
-        Math.ceil(currentSourceHeight)
+      captureContainer.style.left =
+        '0'
 
-      const pageContext =
-        pageCanvas.getContext('2d')
+      captureContainer.style.top =
+        '0'
 
-      if (!pageContext) {
+      captureContainer.style.width =
+        `${width}px`
+
+      captureContainer.style.background =
+        '#ffffff'
+
+      captureContainer.style.padding =
+        '0'
+
+      captureContainer.style.margin =
+        '0'
+
+      captureContainer.style.zIndex =
+        '-9999'
+
+      captureContainer.style.pointerEvents =
+        'none'
+
+      /*
+       * Clone the invoice.
+       */
+      const clone =
+        element.cloneNode(
+          true
+        ) as HTMLDivElement
+
+      clone.style.width =
+        `${width}px`
+
+      clone.style.maxWidth =
+        'none'
+
+      clone.style.background =
+        '#ffffff'
+
+      clone.style.margin =
+        '0'
+
+      clone.style.boxShadow =
+        'none'
+
+      /*
+       * Remove anything that could interfere with
+       * PDF generation.
+       */
+      clone
+        .querySelectorAll(
+          'button'
+        )
+        .forEach((button) => {
+          button.remove()
+        })
+
+      captureContainer.appendChild(clone)
+
+      document.body.appendChild(
+        captureContainer
+      )
+
+      /*
+       * Handle images.
+       *
+       * External images can sometimes prevent html2canvas
+       * from creating a usable canvas because of CORS.
+       *
+       * We first allow images to load. If a remote image
+       * cannot be safely captured, it is removed.
+       */
+      const images =
+        Array.from(
+          clone.querySelectorAll('img')
+        )
+
+      for (const image of images) {
+        try {
+          if (!image.complete) {
+            await new Promise<void>(
+              (resolve) => {
+                let finished = false
+
+                const finish = () => {
+                  if (finished) return
+
+                  finished = true
+
+                  image.removeEventListener(
+                    'load',
+                    finish
+                  )
+
+                  image.removeEventListener(
+                    'error',
+                    finish
+                  )
+
+                  resolve()
+                }
+
+                image.addEventListener(
+                  'load',
+                  finish
+                )
+
+                image.addEventListener(
+                  'error',
+                  finish
+                )
+
+                window.setTimeout(
+                  finish,
+                  5000
+                )
+              }
+            )
+          }
+
+          if (
+            typeof image.decode ===
+            'function'
+          ) {
+            await image
+              .decode()
+              .catch(
+                () => undefined
+              )
+          }
+        } catch {
+          /*
+           * Ignore image errors here.
+           */
+        }
+      }
+
+      /*
+       * First capture attempt.
+       */
+      let canvas: HTMLCanvasElement
+
+      try {
+        canvas =
+          await html2canvas(
+            clone,
+            {
+              scale: Math.min(
+                2,
+                window.devicePixelRatio ||
+                  2
+              ),
+              useCORS: true,
+              allowTaint: false,
+              backgroundColor:
+                '#ffffff',
+              logging: false,
+              imageTimeout: 10000,
+              removeContainer: true,
+              scrollX: 0,
+              scrollY: 0,
+              width: clone.scrollWidth,
+              height: clone.scrollHeight,
+              windowWidth:
+                Math.max(
+                  clone.scrollWidth,
+                  800
+                ),
+              windowHeight:
+                Math.max(
+                  clone.scrollHeight,
+                  1000
+                ),
+            }
+          )
+      } catch (firstError) {
+        console.error(
+          'First PDF canvas capture failed:',
+          firstError
+        )
+
+        /*
+         * Remove images and retry.
+         *
+         * This is important because a Supabase/external
+         * business logo can fail CORS and prevent the
+         * canvas from being generated.
+         */
+        clone
+          .querySelectorAll('img')
+          .forEach((image) => {
+            image.remove()
+          })
+
+        canvas =
+          await html2canvas(
+            clone,
+            {
+              scale: 2,
+              useCORS: false,
+              allowTaint: false,
+              backgroundColor:
+                '#ffffff',
+              logging: false,
+              imageTimeout: 5000,
+              removeContainer: true,
+              scrollX: 0,
+              scrollY: 0,
+              width: clone.scrollWidth,
+              height: clone.scrollHeight,
+              windowWidth:
+                Math.max(
+                  clone.scrollWidth,
+                  800
+                ),
+              windowHeight:
+                Math.max(
+                  clone.scrollHeight,
+                  1000
+                ),
+            }
+          )
+      }
+
+      /*
+       * Remove temporary capture DOM.
+       */
+      if (captureContainer) {
+        captureContainer.remove()
+        captureContainer = null
+      }
+
+      /*
+       * Validate canvas.
+       */
+      if (
+        !canvas ||
+        canvas.width <= 0 ||
+        canvas.height <= 0
+      ) {
+        console.error(
+          'PDF canvas is empty.'
+        )
+
         return null
       }
 
       /*
-       * White background.
+       * ========================================================
+       * CREATE A4 PDF
+       * ========================================================
        */
-      pageContext.fillStyle = '#ffffff'
 
-      pageContext.fillRect(
-        0,
-        0,
-        pageCanvas.width,
-        pageCanvas.height
-      )
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+        compress: true,
+      })
+
+      const pageWidth = 210
+      const pageHeight = 297
+      const margin = 10
+
+      const printableWidth =
+        pageWidth - margin * 2
+
+      const printableHeight =
+        pageHeight - margin * 2
 
       /*
-       * Copy the correct portion of the invoice.
+       * Scale the canvas to A4 width.
        */
-      pageContext.drawImage(
-        canvas,
-        0,
-        sourceY,
-        canvas.width,
-        currentSourceHeight,
-        0,
-        0,
-        canvas.width,
-        currentSourceHeight
+      const pdfScale =
+        printableWidth /
+        canvas.width
+
+      const renderedHeight =
+        canvas.height *
+        pdfScale
+
+      /*
+       * ========================================================
+       * SINGLE PAGE
+       * ========================================================
+       */
+      if (
+        renderedHeight <=
+        printableHeight
+      ) {
+        pdf.addImage(
+          canvas.toDataURL(
+            'image/jpeg',
+            0.92
+          ),
+          'JPEG',
+          margin,
+          margin,
+          printableWidth,
+          renderedHeight,
+          undefined,
+          'FAST'
+        )
+
+        return pdf
+      }
+
+      /*
+       * ========================================================
+       * MULTI PAGE
+       * ========================================================
+       */
+
+      const sourcePageHeight =
+        printableHeight /
+        pdfScale
+
+      let sourceY = 0
+      let pageNumber = 0
+
+      while (
+        sourceY <
+        canvas.height
+      ) {
+        if (pageNumber > 0) {
+          pdf.addPage()
+        }
+
+        const remainingHeight =
+          canvas.height -
+          sourceY
+
+        const currentSourceHeight =
+          Math.min(
+            sourcePageHeight,
+            remainingHeight
+          )
+
+        const pageCanvas =
+          document.createElement(
+            'canvas'
+          )
+
+        pageCanvas.width =
+          canvas.width
+
+        pageCanvas.height =
+          Math.max(
+            1,
+            Math.ceil(
+              currentSourceHeight
+            )
+          )
+
+        const context =
+          pageCanvas.getContext(
+            '2d'
+          )
+
+        if (!context) {
+          return null
+        }
+
+        /*
+         * White page background.
+         */
+        context.fillStyle =
+          '#ffffff'
+
+        context.fillRect(
+          0,
+          0,
+          pageCanvas.width,
+          pageCanvas.height
+        )
+
+        /*
+         * Copy this portion of the
+         * invoice onto the page.
+         */
+        context.drawImage(
+          canvas,
+          0,
+          sourceY,
+          canvas.width,
+          currentSourceHeight,
+          0,
+          0,
+          canvas.width,
+          currentSourceHeight
+        )
+
+        const pageRenderedHeight =
+          currentSourceHeight *
+          pdfScale
+
+        pdf.addImage(
+          pageCanvas.toDataURL(
+            'image/jpeg',
+            0.92
+          ),
+          'JPEG',
+          margin,
+          margin,
+          printableWidth,
+          pageRenderedHeight,
+          undefined,
+          'FAST'
+        )
+
+        sourceY +=
+          currentSourceHeight
+
+        pageNumber += 1
+      }
+
+      return pdf
+    } catch (error) {
+      console.error(
+        'createPdf() failed:',
+        error
       )
 
-      const pageRenderedHeight =
-        currentSourceHeight * scale
+      if (captureContainer) {
+        captureContainer.remove()
+      }
 
-      pdf.addImage(
-        pageCanvas.toDataURL('image/jpeg', 0.95),
-        'JPEG',
-        margin,
-        margin,
-        printableWidth,
-        pageRenderedHeight,
-        undefined,
-        'FAST'
-      )
-
-      sourceY += currentSourceHeight
-
-      pageNumber += 1
+      return null
     }
-
-    return pdf
   }
 
   /*
@@ -338,8 +647,10 @@ export function InvoiceDetail() {
    * DOWNLOAD PDF
    * ==========================================================
    *
-   * Uses jsPDF.save() directly.
-   * This is more reliable than creating a temporary Blob URL.
+   * Uses a Blob URL + temporary anchor instead of relying
+   * only on jsPDF.save().
+   *
+   * This gives the browser a normal downloadable file.
    */
   async function downloadPdf() {
     if (!invoice) return
@@ -347,29 +658,66 @@ export function InvoiceDetail() {
     setShareMessage('')
 
     try {
-      const pdf = await createPdf()
+      const pdf =
+        await createPdf()
 
       if (!pdf) {
         setShareMessage(
-          'Could not create the invoice PDF.'
+          'Could not create the invoice PDF. Please try again.'
         )
 
         return
       }
 
-      /*
-       * Direct browser download.
-       */
-      pdf.save(
+      const fileName =
         `${invoice.invoice_number}.pdf`
+
+      const blob =
+        pdf.output('blob')
+
+      if (
+        !blob ||
+        blob.size <= 0
+      ) {
+        throw new Error(
+          'Generated PDF blob is empty.'
+        )
+      }
+
+      const url =
+        URL.createObjectURL(blob)
+
+      const anchor =
+        document.createElement(
+          'a'
+        )
+
+      anchor.href = url
+      anchor.download = fileName
+      anchor.style.display = 'none'
+
+      document.body.appendChild(
+        anchor
       )
+
+      anchor.click()
+
+      anchor.remove()
+
+      /*
+       * Give the browser time to start
+       * the download before releasing the URL.
+       */
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url)
+      }, 1000)
 
       setShareMessage(
         'Invoice PDF downloaded successfully.'
       )
     } catch (error) {
       console.error(
-        'PDF download error:',
+        'Download PDF failed:',
         error
       )
 
@@ -383,11 +731,6 @@ export function InvoiceDetail() {
    * ==========================================================
    * SHARE PDF
    * ==========================================================
-   *
-   * Uses Web Share API when supported.
-   *
-   * If the browser cannot share files, we automatically
-   * download the PDF instead.
    */
   async function handleSend() {
     if (!invoice) return
@@ -396,88 +739,148 @@ export function InvoiceDetail() {
     setShareMessage('')
 
     try {
-      const pdf = await createPdf()
+      const pdf =
+        await createPdf()
 
       if (!pdf) {
         setShareMessage(
-          'Could not create the invoice PDF.'
+          'Could not create the invoice PDF. Please try again.'
         )
 
         return
       }
 
-      /*
-       * Get the PDF as a Blob.
-       */
-      const blob = pdf.output('blob')
-
-      /*
-       * Convert Blob into a File.
-       */
-      const file = new File(
-        [blob],
-        `${invoice.invoice_number}.pdf`,
-        {
-          type: 'application/pdf',
-        }
-      )
-
-      const shareData: ShareData = {
-        title:
-          `Invoice ${invoice.invoice_number}`,
-
-        text:
-          `Invoice ${invoice.invoice_number} from ${
-            meta.business_name ||
-            'your business'
-          } — ${formatMoney(total)}.`,
-
-        files: [file],
-      }
-
-      /*
-       * Check whether the browser supports
-       * file sharing.
-       */
-      const canShareFiles =
-        typeof navigator.share === 'function' &&
-        typeof navigator.canShare === 'function' &&
-        navigator.canShare({
-          files: [file],
-        })
-
-      if (canShareFiles) {
-        await navigator.share(shareData)
-
-        setShareMessage(
-          'Invoice PDF is ready to share.'
-        )
-
-        return
-      }
-
-      /*
-       * Some desktop browsers do not support
-       * navigator.share().
-       *
-       * In that case download automatically.
-       */
-      pdf.save(
+      const fileName =
         `${invoice.invoice_number}.pdf`
+
+      const blob =
+        pdf.output('blob')
+
+      if (
+        !blob ||
+        blob.size <= 0
+      ) {
+        throw new Error(
+          'Generated PDF blob is empty.'
+        )
+      }
+
+      const file =
+        new File(
+          [blob],
+          fileName,
+          {
+            type: 'application/pdf',
+          }
+        )
+
+      /*
+       * Native browser file sharing.
+       *
+       * Supported mainly on mobile browsers and
+       * some supported desktop environments.
+       */
+      if (
+        typeof navigator.share ===
+        'function'
+      ) {
+        let canShareFiles = false
+
+        if (
+          typeof navigator.canShare ===
+          'function'
+        ) {
+          try {
+            canShareFiles =
+              navigator.canShare({
+                files: [file],
+              })
+          } catch {
+            canShareFiles = false
+          }
+        }
+
+        if (canShareFiles) {
+          try {
+            await navigator.share({
+              title:
+                `Invoice ${invoice.invoice_number}`,
+              text:
+                `Invoice ${invoice.invoice_number} from ${
+                  meta.business_name ||
+                  'your business'
+                } — ${formatMoney(total)}.`,
+              files: [file],
+            })
+
+            setShareMessage(
+              'Invoice PDF shared successfully.'
+            )
+
+            return
+          } catch (error) {
+            /*
+             * Closing/canceling the native share dialog
+             * is not an application error.
+             */
+            if (
+              error instanceof
+                DOMException &&
+              error.name ===
+                'AbortError'
+            ) {
+              setShareMessage('')
+              return
+            }
+
+            console.error(
+              'Native file sharing failed:',
+              error
+            )
+          }
+        }
+      }
+
+      /*
+       * Desktop browsers that don't support
+       * navigator.share() will download the file.
+       */
+      const url =
+        URL.createObjectURL(blob)
+
+      const anchor =
+        document.createElement(
+          'a'
+        )
+
+      anchor.href = url
+      anchor.download = fileName
+      anchor.style.display = 'none'
+
+      document.body.appendChild(
+        anchor
       )
+
+      anchor.click()
+
+      anchor.remove()
+
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url)
+      }, 1000)
 
       setShareMessage(
-        'Your browser does not support direct file sharing. The PDF has been downloaded.'
+        'Direct file sharing is not supported by this browser. The PDF has been downloaded instead.'
       )
     } catch (error) {
       console.error(
-        'PDF share error:',
+        'Share PDF failed:',
         error
       )
 
       /*
-       * User closing/canceling the share dialog
-       * should not show an error.
+       * Don't show an error when the user simply
+       * closes the native sharing dialog.
        */
       if (
         error instanceof DOMException &&
@@ -488,15 +891,49 @@ export function InvoiceDetail() {
       }
 
       /*
-       * If sharing fails, attempt direct download.
+       * Final fallback: generate the PDF again and
+       * download it using a Blob URL.
        */
       try {
-        const pdf = await createPdf()
+        const fallbackPdf =
+          await createPdf()
 
-        if (pdf) {
-          pdf.save(
+        if (fallbackPdf) {
+          const fallbackBlob =
+            fallbackPdf.output('blob')
+
+          const fallbackUrl =
+            URL.createObjectURL(
+              fallbackBlob
+            )
+
+          const anchor =
+            document.createElement(
+              'a'
+            )
+
+          anchor.href =
+            fallbackUrl
+
+          anchor.download =
             `${invoice.invoice_number}.pdf`
+
+          anchor.style.display =
+            'none'
+
+          document.body.appendChild(
+            anchor
           )
+
+          anchor.click()
+
+          anchor.remove()
+
+          window.setTimeout(() => {
+            URL.revokeObjectURL(
+              fallbackUrl
+            )
+          }, 1000)
 
           setShareMessage(
             'Sharing was unavailable, so the PDF was downloaded instead.'
@@ -504,10 +941,10 @@ export function InvoiceDetail() {
 
           return
         }
-      } catch (downloadError) {
+      } catch (fallbackError) {
         console.error(
-          'Fallback PDF download error:',
-          downloadError
+          'Fallback PDF download failed:',
+          fallbackError
         )
       }
 
@@ -553,7 +990,6 @@ export function InvoiceDetail() {
       </header>
 
       <div className="max-w-lg mx-auto px-4 pt-4">
-
         {/* =====================================================
             INVOICE DOCUMENT
             ===================================================== */}
@@ -563,8 +999,8 @@ export function InvoiceDetail() {
           id="invoice-pdf"
           className="ledger-card p-5 mb-5 bg-white"
         >
-
           {/* Branded header */}
+
           <div className="flex justify-between items-start gap-4 mb-6">
             <div className="flex items-start gap-2.5 min-w-0">
               {logoUrl && (
@@ -609,6 +1045,7 @@ export function InvoiceDetail() {
           </div>
 
           {/* Bill to + invoice meta */}
+
           <div className="flex justify-between gap-4 mb-5">
             <div className="min-w-0">
               <p className="text-[10px] font-bold tracking-widest text-slate-900 mb-1">
@@ -668,11 +1105,10 @@ export function InvoiceDetail() {
           </div>
 
           {/* Line items */}
+
           <div className="rounded-md overflow-hidden border border-[#E7E2D6]">
             <div className="bg-[color:var(--color-ledger)] text-white text-[10px] sm:text-[11px] font-semibold grid grid-cols-[minmax(0,1fr)_32px_56px_68px] sm:grid-cols-[minmax(0,1fr)_44px_76px_92px] gap-1 sm:gap-2 px-2 sm:px-3 py-2">
-              <span>
-                Description
-              </span>
+              <span>Description</span>
 
               <span className="text-center">
                 QTY
@@ -718,6 +1154,7 @@ export function InvoiceDetail() {
             ))}
 
             {/* Totals */}
+
             <div className="border-t border-[#E7E2D6] bg-white">
               <div className="flex justify-between px-3 py-1.5 text-xs">
                 <span className="font-semibold">
@@ -772,6 +1209,7 @@ export function InvoiceDetail() {
           </div>
 
           {/* Payment method */}
+
           {(meta.business_payment_details ||
             paid > 0) && (
             <div className="mt-5">
@@ -795,6 +1233,7 @@ export function InvoiceDetail() {
           )}
 
           {/* Terms */}
+
           {(meta.business_terms ||
             invoice.notes) && (
             <div className="mt-5">
