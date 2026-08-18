@@ -91,12 +91,7 @@ export function InvoiceDetail() {
   )
 
   const paid = amountPaid(invoice.payments ?? [])
-
-  const balance = Math.max(
-    0,
-    total - paid
-  )
-
+  const balance = Math.max(0, total - paid)
   const status = deriveStatus(invoice)
 
   const daysOverdue = differenceInCalendarDays(
@@ -107,15 +102,12 @@ export function InvoiceDetail() {
   async function handleDelete() {
     if (
       !id ||
-      !confirm(
-        'Delete this invoice? This cannot be undone.'
-      )
+      !confirm('Delete this invoice? This cannot be undone.')
     ) {
       return
     }
 
     await deleteInvoice(id)
-
     navigate('/')
   }
 
@@ -152,137 +144,156 @@ export function InvoiceDetail() {
 
   /*
    * ==========================================================
-   * WAIT FOR INVOICE TO BE FULLY RENDERED
+   * WAIT FOR ALL IMAGES INSIDE THE INVOICE
    * ==========================================================
    */
 
-  async function waitForInvoiceRender(
+  async function waitForImages(
     element: HTMLElement
   ) {
-    if (document.fonts?.ready) {
-      await document.fonts.ready
-    }
-
     const images = Array.from(
       element.querySelectorAll('img')
     )
 
     await Promise.all(
-      images.map(
-        (img) =>
-          new Promise<void>((resolve) => {
-            if (img.complete) {
-              resolve()
-              return
-            }
+      images.map(async (img) => {
+        if (img.complete && img.naturalWidth > 0) {
+          return
+        }
 
-            img.onload = () => resolve()
-            img.onerror = () => resolve()
-          })
-      )
-    )
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            img.removeEventListener('load', done)
+            img.removeEventListener('error', done)
+            resolve()
+          }
 
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          resolve()
+          img.addEventListener('load', done)
+          img.addEventListener('error', done)
         })
       })
-    })
+    )
   }
 
   /*
    * ==========================================================
-   * CREATE PDF
+   * CREATE PDF FROM THE ACTUAL INVOICE PREVIEW
    * ==========================================================
    *
-   * IMPORTANT:
+   * The visible invoice remains the source of truth.
    *
-   * The PDF is generated directly from the invoice preview.
-   * Therefore the invoice items, spacing, typography and
-   * branding remain visually consistent with the screen.
+   * We clone the invoice into an off-screen container so that
+   * html2canvas can capture a stable desktop-sized version
+   * without changing what the user sees.
    */
 
   async function createPdf(): Promise<Blob | null> {
-    const element = invoiceRef.current
+    const source = invoiceRef.current
 
-    if (!element) {
-      return null
+    if (!source) {
+      throw new Error(
+        'Invoice preview could not be found.'
+      )
     }
 
-    await waitForInvoiceRender(element)
+    /*
+     * Wait for fonts.
+     */
+    if (document.fonts?.ready) {
+      await document.fonts.ready
+    }
 
     /*
-     * Store the original styles so we can restore everything
-     * after html2canvas finishes.
+     * Wait for invoice images.
      */
-    const originalWidth = element.style.width
-    const originalMaxWidth = element.style.maxWidth
-    const originalTransform = element.style.transform
-    const originalTransformOrigin =
-      element.style.transformOrigin
+    await waitForImages(source)
+
+    /*
+     * Clone the actual invoice preview.
+     */
+    const clone = source.cloneNode(
+      true
+    ) as HTMLDivElement
+
+    /*
+     * Remove the React ref attribute from the clone.
+     */
+    clone.removeAttribute('ref')
+
+    /*
+     * The clone is positioned off-screen.
+     *
+     * It is still rendered by the browser, allowing
+     * html2canvas to correctly calculate layout.
+     */
+    const wrapper = document.createElement('div')
+
+    wrapper.style.position = 'fixed'
+    wrapper.style.left = '-100000px'
+    wrapper.style.top = '0'
+    wrapper.style.width = `${source.scrollWidth}px`
+    wrapper.style.background = '#ffffff'
+    wrapper.style.zIndex = '-9999'
+    wrapper.style.pointerEvents = 'none'
+    wrapper.style.opacity = '1'
+
+    clone.style.width = `${source.scrollWidth}px`
+    clone.style.maxWidth = 'none'
+    clone.style.margin = '0'
+    clone.style.background = '#ffffff'
+
+    wrapper.appendChild(clone)
+    document.body.appendChild(wrapper)
 
     try {
       /*
-       * Keep the invoice at its actual preview width.
-       * Do NOT change the invoice layout before capturing.
+       * Give the browser one frame to render the clone.
        */
-      element.style.width = `${element.scrollWidth}px`
-      element.style.maxWidth = 'none'
-      element.style.transform = 'none'
-      element.style.transformOrigin = 'top left'
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve()
+          })
+        })
+      })
 
-      const width = element.scrollWidth
-      const height = element.scrollHeight
+      /*
+       * Wait for cloned images as well.
+       */
+      await waitForImages(clone)
 
-      if (!width || !height) {
-        return null
+      if (document.fonts?.ready) {
+        await document.fonts.ready
       }
 
-      const canvas = await html2canvas(
-        element,
-        {
-          scale: Math.min(
-            2,
-            window.devicePixelRatio || 1
-          ),
-
-          useCORS: true,
-
-          allowTaint: false,
-
-          backgroundColor: '#ffffff',
-
-          logging: false,
-
-          imageTimeout: 20000,
-
-          width,
-
-          height,
-
-          windowWidth: Math.max(
-            document.documentElement.clientWidth,
-            width
-          ),
-
-          windowHeight: Math.max(
-            document.documentElement.clientHeight,
-            height
-          ),
-
-          scrollX: 0,
-
-          scrollY: -window.scrollY,
-        }
-      )
+      /*
+       * Capture the exact invoice design.
+       */
+      const canvas = await html2canvas(clone, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: '#ffffff',
+        logging: false,
+        imageTimeout: 20000,
+        removeContainer: true,
+        foreignObjectRendering: false,
+      })
 
       if (
         !canvas.width ||
         !canvas.height
       ) {
-        return null
+        throw new Error(
+          'Invoice image could not be generated.'
+        )
       }
+
+      /*
+       * ======================================================
+       * CREATE A4 PDF
+       * ======================================================
+       */
 
       const pdf = new jsPDF({
         orientation: 'portrait',
@@ -294,7 +305,7 @@ export function InvoiceDetail() {
       const pageWidth = 210
       const pageHeight = 297
 
-      const margin = 8
+      const margin = 10
 
       const printableWidth =
         pageWidth - margin * 2
@@ -303,29 +314,69 @@ export function InvoiceDetail() {
         pageHeight - margin * 2
 
       /*
-       * Calculate how many source pixels correspond
-       * to the printable A4 height.
+       * Scale the captured invoice to A4 width.
        */
       const scale =
         printableWidth / canvas.width
+
+      const totalRenderedHeight =
+        canvas.height * scale
+
+      /*
+       * ======================================================
+       * ONE PAGE
+       * ======================================================
+       */
+
+      if (
+        totalRenderedHeight <=
+        printableHeight
+      ) {
+        pdf.addImage(
+          canvas.toDataURL(
+            'image/jpeg',
+            0.95
+          ),
+          'JPEG',
+          margin,
+          margin,
+          printableWidth,
+          totalRenderedHeight,
+          undefined,
+          'FAST'
+        )
+
+        return pdf.output('blob')
+      }
+
+      /*
+       * ======================================================
+       * MULTI-PAGE PDF
+       * ======================================================
+       *
+       * We split the SAME captured invoice.
+       *
+       * We do NOT rebuild the invoice.
+       * We do NOT change its design.
+       */
 
       const sourcePageHeight =
         printableHeight / scale
 
       let sourceY = 0
-      let pageIndex = 0
+      let pageNumber = 0
 
       while (
         sourceY < canvas.height
       ) {
-        if (pageIndex > 0) {
+        if (pageNumber > 0) {
           pdf.addPage()
         }
 
         const remainingHeight =
           canvas.height - sourceY
 
-        const currentHeight =
+        const currentSourceHeight =
           Math.min(
             sourcePageHeight,
             remainingHeight
@@ -340,19 +391,26 @@ export function InvoiceDetail() {
           canvas.width
 
         pageCanvas.height =
-          Math.ceil(currentHeight)
+          Math.ceil(
+            currentSourceHeight
+          )
 
         const context =
-          pageCanvas.getContext('2d')
+          pageCanvas.getContext(
+            '2d'
+          )
 
         if (!context) {
-          return null
+          throw new Error(
+            'Could not prepare PDF page.'
+          )
         }
 
         /*
-         * Always paint a white background.
+         * White background.
          */
-        context.fillStyle = '#ffffff'
+        context.fillStyle =
+          '#ffffff'
 
         context.fillRect(
           0,
@@ -362,7 +420,7 @@ export function InvoiceDetail() {
         )
 
         /*
-         * Copy the corresponding section
+         * Copy the appropriate section
          * of the original invoice.
          */
         context.drawImage(
@@ -370,64 +428,48 @@ export function InvoiceDetail() {
           0,
           sourceY,
           canvas.width,
-          currentHeight,
+          currentSourceHeight,
           0,
           0,
           canvas.width,
-          currentHeight
+          currentSourceHeight
         )
 
-        const renderedHeight =
-          currentHeight * scale
+        const pageRenderedHeight =
+          currentSourceHeight * scale
 
-        const imageData =
+        pdf.addImage(
           pageCanvas.toDataURL(
             'image/jpeg',
             0.95
-          )
-
-        pdf.addImage(
-          imageData,
+          ),
           'JPEG',
           margin,
           margin,
           printableWidth,
-          renderedHeight,
+          pageRenderedHeight,
           undefined,
           'FAST'
         )
 
-        sourceY += currentHeight
+        sourceY +=
+          currentSourceHeight
 
-        pageIndex += 1
+        pageNumber += 1
       }
 
-      /*
-       * Return the completed PDF as a Blob.
-       */
       return pdf.output('blob')
-    } catch (error) {
-      console.error(
-        'Invoice PDF generation failed:',
-        error
-      )
-
-      return null
     } finally {
       /*
-       * Restore the invoice preview exactly as it was.
+       * Always remove the temporary clone.
        */
-      element.style.width =
-        originalWidth
-
-      element.style.maxWidth =
-        originalMaxWidth
-
-      element.style.transform =
-        originalTransform
-
-      element.style.transformOrigin =
-        originalTransformOrigin
+      if (
+        wrapper.parentNode
+      ) {
+        wrapper.parentNode.removeChild(
+          wrapper
+        )
+      }
     }
   }
 
@@ -438,60 +480,76 @@ export function InvoiceDetail() {
    */
 
   async function downloadPdf() {
-    if (!invoice || sharing) return
+    if (!invoice) return
 
-    setSharing(true)
     setShareMessage('')
 
     try {
+      setSharing(true)
+
       const pdf = await createPdf()
 
       if (!pdf) {
-        setShareMessage(
-          'Could not create the invoice PDF. Please try again.'
+        throw new Error(
+          'PDF generation returned no file.'
         )
-
-        return
       }
 
+      const fileName =
+        `${invoice.invoice_number}.pdf`
+
+      /*
+       * Create a Blob URL.
+       */
       const url =
         URL.createObjectURL(pdf)
 
+      /*
+       * Create a temporary download link.
+       */
       const link =
         document.createElement('a')
 
       link.href = url
-
-      link.download =
-        `${invoice.invoice_number}.pdf`
-
+      link.download = fileName
       link.style.display = 'none'
 
-      document.body.appendChild(link)
-
-      link.click()
-
-      document.body.removeChild(link)
+      document.body.appendChild(
+        link
+      )
 
       /*
-       * Give the browser time to start the download
-       * before releasing the Blob URL.
+       * Trigger browser download.
+       */
+      link.click()
+
+      /*
+       * Remove link immediately.
+       */
+      document.body.removeChild(
+        link
+      )
+
+      /*
+       * Give the browser enough time to
+       * start the download before revoking
+       * the Blob URL.
        */
       setTimeout(() => {
         URL.revokeObjectURL(url)
-      }, 1000)
+      }, 10000)
 
       setShareMessage(
         'Invoice PDF downloaded successfully.'
       )
     } catch (error) {
       console.error(
-        'PDF download failed:',
+        'Invoice PDF download error:',
         error
       )
 
       setShareMessage(
-        'Could not download the PDF. Please try again.'
+        'Could not generate the PDF. Please try again.'
       )
     } finally {
       setSharing(false)
@@ -505,32 +563,37 @@ export function InvoiceDetail() {
    */
 
   async function handleSend() {
-    if (!invoice || sharing) return
+    if (!invoice) return
 
     setSharing(true)
     setShareMessage('')
 
     try {
-      const pdf = await createPdf()
+      const pdf =
+        await createPdf()
 
       if (!pdf) {
-        setShareMessage(
-          'Could not create the invoice PDF.'
+        throw new Error(
+          'PDF generation failed.'
         )
-
-        return
       }
+
+      const fileName =
+        `${invoice.invoice_number}.pdf`
 
       const file =
         new File(
           [pdf],
-          `${invoice.invoice_number}.pdf`,
+          fileName,
           {
             type: 'application/pdf',
           }
         )
 
-      const shareData: ShareData = {
+      const shareData:
+        ShareData & {
+          files: File[]
+        } = {
         title:
           `Invoice ${invoice.invoice_number}`,
 
@@ -544,33 +607,40 @@ export function InvoiceDetail() {
       }
 
       /*
-       * Use native sharing only when the browser
-       * explicitly supports file sharing.
+       * Use native sharing when supported.
        */
-      const canShareFiles =
-        typeof navigator.share === 'function' &&
-        typeof navigator.canShare === 'function' &&
-        navigator.canShare({
-          files: [file],
-        })
+      if (
+        typeof navigator.share ===
+          'function'
+      ) {
+        let canShareFiles = true
 
-      if (canShareFiles) {
-        await navigator.share(
-          shareData
-        )
+        if (
+          typeof navigator.canShare ===
+          'function'
+        ) {
+          canShareFiles =
+            navigator.canShare({
+              files: [file],
+            })
+        }
 
-        setShareMessage(
-          'Invoice PDF is ready to share.'
-        )
+        if (canShareFiles) {
+          await navigator.share(
+            shareData
+          )
 
-        return
+          setShareMessage(
+            'Invoice PDF is ready to share.'
+          )
+
+          return
+        }
       }
 
       /*
-       * Desktop browsers such as Chrome/Edge may not
-       * support navigator.share().
-       *
-       * In that case download the PDF instead.
+       * If file sharing isn't supported,
+       * download the PDF instead.
        */
       const url =
         URL.createObjectURL(pdf)
@@ -579,45 +649,46 @@ export function InvoiceDetail() {
         document.createElement('a')
 
       link.href = url
-
-      link.download =
-        `${invoice.invoice_number}.pdf`
-
+      link.download = fileName
       link.style.display = 'none'
 
-      document.body.appendChild(link)
+      document.body.appendChild(
+        link
+      )
 
       link.click()
 
-      document.body.removeChild(link)
+      document.body.removeChild(
+        link
+      )
 
       setTimeout(() => {
         URL.revokeObjectURL(url)
-      }, 1000)
+      }, 10000)
 
       setShareMessage(
-        'PDF downloaded. You can attach it to WhatsApp, email, or another app.'
+        'PDF downloaded. You can now attach it to WhatsApp, email, or another app.'
       )
     } catch (error) {
-      console.error(
-        'Invoice sharing failed:',
-        error
-      )
-
       /*
-       * User cancelled the native share dialog.
+       * User cancelling native share is not an error.
        */
       if (
         error instanceof DOMException &&
-        error.name === 'AbortError'
+        error.name ===
+          'AbortError'
       ) {
         setShareMessage('')
         return
       }
 
+      console.error(
+        'Invoice sharing error:',
+        error
+      )
+
       /*
-       * If sharing fails, automatically attempt
-       * a direct download.
+       * Last-resort download attempt.
        */
       try {
         const pdf =
@@ -625,7 +696,7 @@ export function InvoiceDetail() {
 
         if (!pdf) {
           throw new Error(
-            'PDF creation failed'
+            'Fallback PDF generation failed.'
           )
         }
 
@@ -636,33 +707,39 @@ export function InvoiceDetail() {
           document.createElement('a')
 
         link.href = url
-
         link.download =
           `${invoice.invoice_number}.pdf`
 
-        link.style.display = 'none'
+        link.style.display =
+          'none'
 
-        document.body.appendChild(link)
+        document.body.appendChild(
+          link
+        )
 
         link.click()
 
-        document.body.removeChild(link)
+        document.body.removeChild(
+          link
+        )
 
         setTimeout(() => {
-          URL.revokeObjectURL(url)
-        }, 1000)
+          URL.revokeObjectURL(
+            url
+          )
+        }, 10000)
 
         setShareMessage(
-          'PDF downloaded successfully. You can attach it to WhatsApp, email, or another app.'
+          'PDF downloaded. You can attach it manually.'
         )
-      } catch (downloadError) {
+      } catch (fallbackError) {
         console.error(
-          'Fallback PDF download failed:',
-          downloadError
+          'Fallback PDF error:',
+          fallbackError
         )
 
         setShareMessage(
-          'Could not create the PDF. Please refresh the page and try again.'
+          'Could not generate the invoice PDF. Please try again.'
         )
       }
     } finally {
@@ -672,22 +749,35 @@ export function InvoiceDetail() {
 
   return (
     <div className="min-h-screen pb-8 bg-[color:var(--color-paper)]">
+
+      {/* =====================================================
+          HEADER
+          ===================================================== */}
+
       <header className="sticky top-0 z-20 bg-[color:var(--color-paper)]/95 backdrop-blur border-b border-[#E7E2D6]">
         <div className="max-w-lg mx-auto px-4 py-4 flex items-center justify-between">
+
           <div className="flex items-center gap-3">
+
             <button
-              onClick={() => navigate(-1)}
+              onClick={() =>
+                navigate(-1)
+              }
               className="text-slate-500"
             >
-              <ArrowLeft size={20} />
+              <ArrowLeft
+                size={20}
+              />
             </button>
 
             <h1 className="font-display text-lg font-semibold font-mono-tab">
               {invoice.invoice_number}
             </h1>
+
           </div>
 
           <div className="flex items-center gap-3 text-slate-500">
+
             <Link
               to={`/invoices/${invoice.id}/edit`}
             >
@@ -695,18 +785,25 @@ export function InvoiceDetail() {
             </Link>
 
             <button
-              onClick={handleDelete}
+              onClick={
+                handleDelete
+              }
             >
-              <Trash2 size={18} />
+              <Trash2
+                size={18}
+              />
             </button>
+
           </div>
+
         </div>
       </header>
 
       <div className="max-w-lg mx-auto px-4 pt-4">
 
         {/* =====================================================
-            INVOICE PREVIEW
+            ACTUAL INVOICE PREVIEW
+            THIS IS THE SOURCE USED FOR THE PDF
             ===================================================== */}
 
         <div
@@ -718,6 +815,7 @@ export function InvoiceDetail() {
           {/* Branded header */}
 
           <div className="flex justify-between items-start gap-4 mb-6">
+
             <div className="flex items-start gap-2.5 min-w-0">
 
               {logoUrl && (
@@ -756,14 +854,16 @@ export function InvoiceDetail() {
                 )}
 
               </div>
+
             </div>
 
             <p className="font-display font-bold text-2xl text-[color:var(--color-ledger)] tracking-wide shrink-0">
               INVOICE
             </p>
+
           </div>
 
-          {/* Bill to + invoice metadata */}
+          {/* Bill to + invoice meta */}
 
           <div className="flex justify-between gap-4 mb-5">
 
@@ -830,7 +930,9 @@ export function InvoiceDetail() {
                 </span>
 
               </div>
+
             </div>
+
           </div>
 
           {/* Line items */}
@@ -963,13 +1065,17 @@ export function InvoiceDetail() {
                 </span>
 
               </div>
+
             </div>
+
           </div>
 
           {/* Payment method */}
 
-          {(meta.business_payment_details ||
-            paid > 0) && (
+          {(
+            meta.business_payment_details ||
+            paid > 0
+          ) && (
             <div className="mt-5">
 
               <p className="text-xs font-bold mb-1">
@@ -1000,10 +1106,12 @@ export function InvoiceDetail() {
             </div>
           )}
 
-          {/* Terms */}
+          {/* Terms & conditions */}
 
-          {(meta.business_terms ||
-            invoice.notes) && (
+          {(
+            meta.business_terms ||
+            invoice.notes
+          ) && (
             <div className="mt-5">
 
               <p className="text-xs font-bold mb-1">
@@ -1075,7 +1183,10 @@ export function InvoiceDetail() {
           <div className="flex items-center justify-between mt-0.5">
 
             <p className="text-base font-medium">
-              {invoice.client?.name}
+              {
+                invoice.client
+                  ?.name
+              }
             </p>
 
             {invoice.status ===
@@ -1100,7 +1211,7 @@ export function InvoiceDetail() {
         </div>
 
         {/* =====================================================
-            SHARE
+            PRIMARY ACTION
             ===================================================== */}
 
         <button
@@ -1130,7 +1241,9 @@ export function InvoiceDetail() {
         <div className="grid grid-cols-4 gap-2 mb-5">
 
           <button
-            onClick={downloadPdf}
+            onClick={
+              downloadPdf
+            }
             disabled={sharing}
             className="flex flex-col items-center gap-1.5 py-2 text-xs font-medium text-slate-700 disabled:opacity-50"
           >
@@ -1366,6 +1479,7 @@ export function InvoiceDetail() {
         )}
 
       </div>
+
     </div>
   )
 }
