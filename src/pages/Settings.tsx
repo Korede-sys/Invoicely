@@ -14,6 +14,8 @@ export function Settings() {
   const [phone, setPhone] = useState(meta.business_phone ?? '')
   const [email, setEmail] = useState(meta.business_email ?? '')
   const [address, setAddress] = useState(meta.business_address ?? '')
+  const [paymentDetails, setPaymentDetails] = useState(meta.business_payment_details ?? '')
+  const [terms, setTerms] = useState(meta.business_terms ?? '')
   const [logoUrl, setLogoUrl] = useState(meta.business_logo_url ?? '')
   const [logoError, setLogoError] = useState<string | null>(null)
   const [uploadingLogo, setUploadingLogo] = useState(false)
@@ -68,6 +70,8 @@ export function Settings() {
         business_phone: phone,
         business_email: email,
         business_address: address,
+        business_payment_details: paymentDetails,
+        business_terms: terms,
       },
     })
     setSaving(false)
@@ -122,6 +126,16 @@ export function Settings() {
         <div>
           <label className="text-xs font-medium text-slate-600 mb-1 block">Address</label>
           <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={2} className="w-full rounded-lg border border-[#E7E2D6] px-3 py-2.5 text-sm" />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-slate-600 mb-1 block">Payment details</label>
+          <textarea value={paymentDetails} onChange={(e) => setPaymentDetails(e.target.value)} rows={3} placeholder={'Account number\nAccount name\nBank'} className="w-full rounded-lg border border-[#E7E2D6] px-3 py-2.5 text-sm" />
+          <p className="text-[11px] text-slate-400 mt-1">Shown under “Payment Method” on your invoices</p>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-slate-600 mb-1 block">Terms &amp; conditions</label>
+          <textarea value={terms} onChange={(e) => setTerms(e.target.value)} rows={4} className="w-full rounded-lg border border-[#E7E2D6] px-3 py-2.5 text-sm" />
+          <p className="text-[11px] text-slate-400 mt-1">Shown at the bottom of every invoice</p>
         </div>
         <button type="submit" disabled={saving} className="w-full rounded-lg bg-[color:var(--color-ledger)] text-white font-semibold py-2.5 text-sm disabled:opacity-60">
           {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
