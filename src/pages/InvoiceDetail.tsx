@@ -200,15 +200,19 @@ export function InvoiceDetail() {
    * CREATE PDF
    * ==========================================================
    *
-   * The PDF is generated from the same invoice element
-   * displayed on screen.
+   * The PDF is generated from the invoice displayed on screen,
+   * but uses an A4-sized temporary layout.
    *
-   * The visible invoice is never modified.
+   * Important:
    *
-   * The cloned invoice receives browser-computed styles
-   * before html2canvas captures it. This helps prevent
-   * problems caused by modern CSS color functions such as
-   * OKLCH/OKLAB.
+   * - Description receives 55% of the line-item width.
+   * - QTY receives 10%.
+   * - Price receives 17%.
+   * - Amount receives 18%.
+   * - The complete invoice is scaled to fit ONE A4 page.
+   * - No second page is created.
+   * - Long descriptions wrap instead of being clipped.
+   * - Financial values stay on one line.
    */
 
   async function createPdf(): Promise<jsPDF | null> {
@@ -253,6 +257,18 @@ export function InvoiceDetail() {
 
       /*
        * --------------------------------------------------------
+       * A4 DIMENSIONS
+       *
+       * 794px ≈ A4 width at 96 DPI.
+       * 1123px ≈ A4 height at 96 DPI.
+       * --------------------------------------------------------
+       */
+
+      const PDF_WIDTH = 794
+      const PDF_HEIGHT = 1123
+
+      /*
+       * --------------------------------------------------------
        * CREATE TEMPORARY CONTAINER
        * --------------------------------------------------------
        */
@@ -270,7 +286,10 @@ export function InvoiceDetail() {
         '0'
 
       pdfContainer.style.width =
-        '760px'
+        `${PDF_WIDTH}px`
+
+      pdfContainer.style.height =
+        `${PDF_HEIGHT}px`
 
       pdfContainer.style.margin =
         '0'
@@ -280,6 +299,9 @@ export function InvoiceDetail() {
 
       pdfContainer.style.background =
         '#ffffff'
+
+      pdfContainer.style.overflow =
+        'hidden'
 
       pdfContainer.style.zIndex =
         '-9999'
@@ -298,22 +320,33 @@ export function InvoiceDetail() {
           true,
         ) as HTMLElement
 
-      pdfClone.removeAttribute('id')
+      pdfClone.removeAttribute(
+        'id',
+      )
 
       pdfClone.style.width =
-        '760px'
+        `${PDF_WIDTH}px`
 
       pdfClone.style.minWidth =
-        '760px'
+        `${PDF_WIDTH}px`
 
       pdfClone.style.maxWidth =
-        '760px'
+        `${PDF_WIDTH}px`
+
+      pdfClone.style.height =
+        'auto'
+
+      pdfClone.style.minHeight =
+        '0'
+
+      pdfClone.style.maxHeight =
+        `${PDF_HEIGHT}px`
 
       pdfClone.style.margin =
         '0'
 
       pdfClone.style.padding =
-        '20px'
+        '28px'
 
       pdfClone.style.boxSizing =
         'border-box'
@@ -321,9 +354,12 @@ export function InvoiceDetail() {
       pdfClone.style.background =
         '#ffffff'
 
+      pdfClone.style.overflow =
+        'hidden'
+
       /*
        * --------------------------------------------------------
-       * ADD CLONE TO TEMPORARY CONTAINER
+       * ADD CLONE TO DOCUMENT
        * --------------------------------------------------------
        */
 
@@ -405,140 +441,199 @@ export function InvoiceDetail() {
           target.style.verticalAlign =
             computed.verticalAlign
 
-          /*
-           * Box sizing
-           */
-
           target.style.boxSizing =
-            computed.boxSizing
+            'border-box'
 
           /*
-           * Colors
+           * ----------------------------------------------------
+           * SAFE COLOR CONVERSION
+           * ----------------------------------------------------
            */
 
-          if (
-            computed.color
-          ) {
+          const safeColor = (
+            value: string,
+            fallback: string,
+          ) => {
             if (
-              computed.color.includes(
+              !value ||
+              value.includes(
                 'oklch',
               ) ||
-              computed.color.includes(
+              value.includes(
                 'oklab',
               )
             ) {
-              target.style.color =
-                '#0f172a'
-            } else {
-              target.style.color =
-                computed.color
+              return fallback
             }
+
+            return value
           }
 
-          if (
-            computed.backgroundColor
-          ) {
-            if (
-              computed.backgroundColor.includes(
-                'oklch',
-              ) ||
-              computed.backgroundColor.includes(
-                'oklab',
-              )
-            ) {
-              target.style.backgroundColor =
-                '#ffffff'
-            } else {
-              target.style.backgroundColor =
-                computed.backgroundColor
-            }
-          }
+          target.style.color =
+            safeColor(
+              computed.color,
+              '#0f172a',
+            )
 
-          /*
-           * Borders
-           */
+          target.style.backgroundColor =
+            safeColor(
+              computed.backgroundColor,
+              '#ffffff',
+            )
 
-          if (
-            computed.borderTopColor
-          ) {
-            if (
-              computed.borderTopColor.includes(
-                'oklch',
-              ) ||
-              computed.borderTopColor.includes(
-                'oklab',
-              )
-            ) {
-              target.style.borderTopColor =
-                '#e7e2d6'
-            } else {
-              target.style.borderTopColor =
-                computed.borderTopColor
-            }
-          }
+          target.style.borderTopColor =
+            safeColor(
+              computed.borderTopColor,
+              '#e7e2d6',
+            )
 
-          if (
-            computed.borderRightColor
-          ) {
-            if (
-              computed.borderRightColor.includes(
-                'oklch',
-              ) ||
-              computed.borderRightColor.includes(
-                'oklab',
-              )
-            ) {
-              target.style.borderRightColor =
-                '#e7e2d6'
-            } else {
-              target.style.borderRightColor =
-                computed.borderRightColor
-            }
-          }
+          target.style.borderRightColor =
+            safeColor(
+              computed.borderRightColor,
+              '#e7e2d6',
+            )
 
-          if (
-            computed.borderBottomColor
-          ) {
-            if (
-              computed.borderBottomColor.includes(
-                'oklch',
-              ) ||
-              computed.borderBottomColor.includes(
-                'oklab',
-              )
-            ) {
-              target.style.borderBottomColor =
-                '#e7e2d6'
-            } else {
-              target.style.borderBottomColor =
-                computed.borderBottomColor
-            }
-          }
+          target.style.borderBottomColor =
+            safeColor(
+              computed.borderBottomColor,
+              '#e7e2d6',
+            )
+
+          target.style.borderLeftColor =
+            safeColor(
+              computed.borderLeftColor,
+              '#e7e2d6',
+            )
+        },
+      )
+
+      /*
+       * --------------------------------------------------------
+       * LINE ITEM GRIDS
+       * --------------------------------------------------------
+       *
+       * Original screen:
+       *
+       * Description | QTY | Price | Amount
+       *
+       * PDF:
+       *
+       * Description = 55%
+       * QTY         = 10%
+       * Price       = 17%
+       * Amount      = 18%
+       *
+       * This prevents Description, Price and Amount from
+       * being clipped.
+       * --------------------------------------------------------
+       */
+
+      const grids =
+        Array.from(
+          pdfClone.querySelectorAll(
+            '[class*="grid-cols-"]',
+          ),
+        )
+
+      grids.forEach(
+        (element) => {
+          const row =
+            element as HTMLElement
+
+          const children =
+            Array.from(
+              row.children,
+            ) as HTMLElement[]
 
           if (
-            computed.borderLeftColor
+            children.length === 4
           ) {
-            if (
-              computed.borderLeftColor.includes(
-                'oklch',
-              ) ||
-              computed.borderLeftColor.includes(
-                'oklab',
-              )
-            ) {
-              target.style.borderLeftColor =
-                '#e7e2d6'
-            } else {
-              target.style.borderLeftColor =
-                computed.borderLeftColor
-            }
+            row.style.display =
+              'grid'
+
+            row.style.gridTemplateColumns =
+              '55% 10% 17% 18%'
+
+            row.style.width =
+              '100%'
+
+            row.style.minWidth =
+              '0'
+
+            row.style.maxWidth =
+              '100%'
+
+            row.style.gap =
+              '0'
+
+            row.style.boxSizing =
+              'border-box'
+
+            children.forEach(
+              (child) => {
+                child.style.minWidth =
+                  '0'
+
+                child.style.maxWidth =
+                  '100%'
+
+                child.style.boxSizing =
+                  'border-box'
+
+                child.style.overflow =
+                  'hidden'
+              },
+            )
+
+            /*
+             * Description
+             */
+
+            children[0].style.whiteSpace =
+              'normal'
+
+            children[0].style.wordBreak =
+              'break-word'
+
+            children[0].style.overflowWrap =
+              'anywhere'
+
+            /*
+             * Quantity
+             */
+
+            children[1].style.whiteSpace =
+              'nowrap'
+
+            children[1].style.textAlign =
+              'center'
+
+            /*
+             * Price
+             */
+
+            children[2].style.whiteSpace =
+              'nowrap'
+
+            children[2].style.textAlign =
+              'right'
+
+            /*
+             * Amount
+             */
+
+            children[3].style.whiteSpace =
+              'nowrap'
+
+            children[3].style.textAlign =
+              'right'
           }
         },
       )
 
       /*
        * --------------------------------------------------------
-       * PRESERVE TABLE STRUCTURE
+       * TABLES
        * --------------------------------------------------------
        */
 
@@ -565,12 +660,15 @@ export function InvoiceDetail() {
 
           element.style.borderCollapse =
             'collapse'
+
+          element.style.boxSizing =
+            'border-box'
         },
       )
 
       /*
        * --------------------------------------------------------
-       * PROTECT FINANCIAL VALUES
+       * FINANCIAL VALUES
        * --------------------------------------------------------
        */
 
@@ -595,40 +693,41 @@ export function InvoiceDetail() {
           htmlElement.style.overflowWrap =
             'normal'
 
-          htmlElement.style.minWidth =
-            'max-content'
+          htmlElement.style.fontVariantNumeric =
+            'tabular-nums'
+
+          htmlElement.style.maxWidth =
+            '100%'
         },
       )
 
       /*
        * --------------------------------------------------------
-       * PROTECT GRID COLUMNS
+       * PREVENT HORIZONTAL OVERFLOW
        * --------------------------------------------------------
        */
 
-      const grids =
+      const allElements =
         Array.from(
-          pdfClone.querySelectorAll(
-            '[class*="grid-cols-"]',
-          ),
+          pdfClone.querySelectorAll('*'),
         )
 
-      grids.forEach(
+      allElements.forEach(
         (element) => {
           const htmlElement =
             element as HTMLElement
 
+          htmlElement.style.maxWidth =
+            '100%'
+
           htmlElement.style.boxSizing =
             'border-box'
-
-          htmlElement.style.minWidth =
-            '0'
         },
       )
 
       /*
        * --------------------------------------------------------
-       * FORCE LINE ITEM COLUMNS TO HAVE ENOUGH SPACE
+       * PDF LINE ITEM FONT SIZES
        * --------------------------------------------------------
        */
 
@@ -647,38 +746,22 @@ export function InvoiceDetail() {
           const children =
             Array.from(
               rowElement.children,
-            )
+            ) as HTMLElement[]
 
           if (
             children.length === 4
           ) {
-            const [
-              description,
-              quantity,
-              price,
-              amount,
-            ] = children as HTMLElement[]
+            children[0].style.fontSize =
+              '11px'
 
-            description.style.minWidth =
-              '0'
+            children[1].style.fontSize =
+              '10px'
 
-            description.style.overflow =
-              'hidden'
+            children[2].style.fontSize =
+              '10px'
 
-            quantity.style.minWidth =
-              '44px'
-
-            price.style.minWidth =
-              '76px'
-
-            amount.style.minWidth =
-              '92px'
-
-            price.style.whiteSpace =
-              'nowrap'
-
-            amount.style.whiteSpace =
-              'nowrap'
+            children[3].style.fontSize =
+              '10px'
           }
         },
       )
@@ -753,16 +836,37 @@ export function InvoiceDetail() {
             await image
               .decode()
               .catch(
-                () => undefined,
+                () =>
+                  undefined,
               )
           }
         } catch {
           /*
-           * Image/logo problems should not
-           * stop PDF creation.
+           * Image/logo errors should
+           * never stop PDF generation.
            */
         }
       }
+
+      /*
+       * --------------------------------------------------------
+       * FORCE LAYOUT RECALCULATION
+       * --------------------------------------------------------
+       */
+
+      void pdfClone.offsetHeight
+
+      await new Promise<void>(
+        (resolve) => {
+          window.requestAnimationFrame(
+            () => {
+              window.requestAnimationFrame(
+                () => resolve(),
+              )
+            },
+          )
+        },
+      )
 
       /*
        * --------------------------------------------------------
@@ -791,9 +895,20 @@ export function InvoiceDetail() {
             removeContainer:
               true,
 
-            width: 760,
+            width:
+              PDF_WIDTH,
 
-            windowWidth: 760,
+            windowWidth:
+              PDF_WIDTH,
+
+            height:
+              Math.min(
+                pdfClone.scrollHeight,
+                PDF_HEIGHT,
+              ),
+
+            windowHeight:
+              PDF_HEIGHT,
 
             ignoreElements:
               () => false,
@@ -802,7 +917,7 @@ export function InvoiceDetail() {
 
       /*
        * --------------------------------------------------------
-       * REMOVE TEMPORARY DOCUMENT
+       * REMOVE TEMPORARY ELEMENT
        * --------------------------------------------------------
        */
 
@@ -856,7 +971,7 @@ export function InvoiceDetail() {
         297
 
       const margin =
-        10
+        8
 
       const printableWidth =
         pageWidth -
@@ -867,148 +982,72 @@ export function InvoiceDetail() {
         margin * 2
 
       /*
-       * Fit invoice to A4 width.
+       * --------------------------------------------------------
+       * SCALE TO FIT ONE A4 PAGE
+       * --------------------------------------------------------
+       *
+       * The smaller scale between width and height is used.
+       *
+       * This guarantees that the invoice stays completely
+       * inside the A4 printable area.
+       * --------------------------------------------------------
        */
 
-      const pdfScale =
+      const widthScale =
         printableWidth /
         canvas.width
 
+      const heightScale =
+        printableHeight /
+        canvas.height
+
+      const scale =
+        Math.min(
+          widthScale,
+          heightScale,
+        )
+
+      const renderedWidth =
+        canvas.width *
+        scale
+
       const renderedHeight =
         canvas.height *
-        pdfScale
+        scale
+
+      /*
+       * Center invoice on A4.
+       */
+
+      const x =
+        (pageWidth -
+          renderedWidth) /
+        2
+
+      const y =
+        (pageHeight -
+          renderedHeight) /
+        2
 
       /*
        * --------------------------------------------------------
-       * ONE PAGE
+       * ADD COMPLETE INVOICE TO ONE A4 PAGE
        * --------------------------------------------------------
        */
 
-      if (
-        renderedHeight <=
-        printableHeight
-      ) {
-        pdf.addImage(
-          canvas.toDataURL(
-            'image/jpeg',
-            0.96,
-          ),
-          'JPEG',
-          margin,
-          margin,
-          printableWidth,
-          renderedHeight,
-          undefined,
-          'FAST',
-        )
-
-        return pdf
-      }
-
-      /*
-       * --------------------------------------------------------
-       * MULTI PAGE
-       * --------------------------------------------------------
-       */
-
-      const sourcePageHeight =
-        printableHeight /
-        pdfScale
-
-      let sourceY =
-        0
-
-      let pageNumber =
-        0
-
-      while (
-        sourceY <
-        canvas.height
-      ) {
-        if (
-          pageNumber > 0
-        ) {
-          pdf.addPage()
-        }
-
-        const remainingHeight =
-          canvas.height -
-          sourceY
-
-        const currentSourceHeight =
-          Math.min(
-            sourcePageHeight,
-            remainingHeight,
-          )
-
-        const pageCanvas =
-          document.createElement(
-            'canvas',
-          )
-
-        pageCanvas.width =
-          canvas.width
-
-        pageCanvas.height =
-          Math.ceil(
-            currentSourceHeight,
-          )
-
-        const context =
-          pageCanvas.getContext(
-            '2d',
-          )
-
-        if (!context) {
-          return null
-        }
-
-        context.fillStyle =
-          '#ffffff'
-
-        context.fillRect(
-          0,
-          0,
-          pageCanvas.width,
-          pageCanvas.height,
-        )
-
-        context.drawImage(
-          canvas,
-          0,
-          sourceY,
-          canvas.width,
-          currentSourceHeight,
-          0,
-          0,
-          canvas.width,
-          currentSourceHeight,
-        )
-
-        const pageRenderedHeight =
-          currentSourceHeight *
-          pdfScale
-
-        pdf.addImage(
-          pageCanvas.toDataURL(
-            'image/jpeg',
-            0.96,
-          ),
-          'JPEG',
-          margin,
-          margin,
-          printableWidth,
-          pageRenderedHeight,
-          undefined,
-          'FAST',
-        )
-
-        sourceY +=
-          currentSourceHeight
-
-        pageNumber +=
-          1
-      }
+      pdf.addImage(
+        canvas.toDataURL(
+          'image/jpeg',
+          0.96,
+        ),
+        'JPEG',
+        x,
+        y,
+        renderedWidth,
+        renderedHeight,
+        undefined,
+        'FAST',
+      )
 
       return pdf
     } catch (error) {
@@ -1018,7 +1057,7 @@ export function InvoiceDetail() {
       )
 
       /*
-       * Always remove temporary PDF
+       * Always remove temporary
        * elements if generation fails.
        */
 
@@ -1058,9 +1097,7 @@ export function InvoiceDetail() {
       const fileName =
         `${invoice.invoice_number}.pdf`
 
-      pdf.save(
-        fileName,
-      )
+      pdf.save(fileName)
 
       setShareMessage(
         'Invoice PDF downloaded successfully.',
@@ -1108,9 +1145,7 @@ export function InvoiceDetail() {
         `${invoice.invoice_number}.pdf`
 
       const blob =
-        pdf.output(
-          'blob',
-        )
+        pdf.output('blob')
 
       const file =
         new File(
@@ -1321,7 +1356,9 @@ export function InvoiceDetail() {
           className="ledger-card p-5 mb-5 bg-white"
         >
 
-          {/* Branded header */}
+          {/* =================================================
+              BRANDED HEADER
+              ================================================= */}
 
           <div className="flex justify-between items-start gap-4 mb-6">
 
@@ -1723,9 +1760,7 @@ export function InvoiceDetail() {
           </div>
 
           <p className="font-mono-tab text-3xl font-bold">
-            {formatMoney(
-              total,
-            )}
+            {formatMoney(total)}
           </p>
 
           <div className="flex items-center justify-between mt-0.5">
@@ -1772,9 +1807,7 @@ export function InvoiceDetail() {
           className="w-full rounded-xl bg-[color:var(--color-ledger)] text-white font-semibold py-3.5 text-sm mb-2 flex items-center justify-center gap-2 disabled:opacity-60"
         >
 
-          <Send
-            size={16}
-          />
+          <Send size={16} />
 
           {sharing
             ? 'Preparing PDF…'
@@ -1804,9 +1837,11 @@ export function InvoiceDetail() {
           >
 
             <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
+
               <Download
                 size={18}
               />
+
             </span>
 
             Download
@@ -1821,9 +1856,11 @@ export function InvoiceDetail() {
           >
 
             <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
+
               <Printer
                 size={18}
               />
+
             </span>
 
             Print
@@ -1836,9 +1873,11 @@ export function InvoiceDetail() {
           >
 
             <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
+
               <Pencil
                 size={18}
               />
+
             </span>
 
             Edit
@@ -1857,9 +1896,11 @@ export function InvoiceDetail() {
             >
 
               <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
+
                 <MoreHorizontal
                   size={18}
                 />
+
               </span>
 
               More
