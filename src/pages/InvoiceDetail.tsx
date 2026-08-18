@@ -1,5 +1,14 @@
-import { useEffect, useState } from 'react'
-import { useNavigate, useParams, Link } from 'react-router-dom'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
+import {
+  useNavigate,
+  useParams,
+  Link,
+} from 'react-router-dom'
 import {
   ArrowLeft,
   Download,
@@ -10,8 +19,13 @@ import {
   Trash2,
   Wallet,
 } from 'lucide-react'
-import { differenceInCalendarDays, format, parseISO } from 'date-fns'
+import {
+  differenceInCalendarDays,
+  format,
+  parseISO,
+} from 'date-fns'
 import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 import {
   deleteInvoice,
   fetchInvoice,
@@ -33,6 +47,8 @@ export function InvoiceDetail() {
   const navigate = useNavigate()
   const { user } = useAuth()
 
+  const invoiceRef = useRef<HTMLDivElement | null>(null)
+
   const meta = (user?.user_metadata ?? {}) as Record<string, string>
   const logoUrl = meta.business_logo_url
 
@@ -45,16 +61,16 @@ export function InvoiceDetail() {
   const [sharing, setSharing] = useState(false)
   const [shareMessage, setShareMessage] = useState('')
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!id) return
 
     const inv = await fetchInvoice(id)
     setInvoice(inv)
-  }
+  }, [id])
 
   useEffect(() => {
-    load()
-  }, [id])
+    void load()
+  }, [load])
 
   if (!invoice) {
     return (
@@ -66,11 +82,13 @@ export function InvoiceDetail() {
 
   const items = invoice.items ?? []
   const subtotal = invoiceSubtotal(items)
+
   const total = invoiceTotal(
     items,
     invoice.tax_rate,
     invoice.discount
   )
+
   const paid = amountPaid(invoice.payments ?? [])
   const balance = Math.max(0, total - paid)
   const status = deriveStatus(invoice)
@@ -123,912 +141,172 @@ export function InvoiceDetail() {
     }
   }
 
-  async function loadImageAsDataUrl(
-    url: string
-  ): Promise<{
-    dataUrl: string
-    format: 'PNG' | 'JPEG'
-    width: number
-    height: number
-  } | null> {
-    try {
-      const res = await fetch(url)
-      const blob = await res.blob()
-
-      const format: 'PNG' | 'JPEG' =
-        blob.type.includes('png') ? 'PNG' : 'JPEG'
-
-      const dataUrl = await new Promise<string>(
-        (resolve, reject) => {
-          const reader = new FileReader()
-
-          reader.onload = () =>
-            resolve(reader.result as string)
-
-          reader.onerror = reject
-
-          reader.readAsDataURL(blob)
-        }
-      )
-
-      const dims = await new Promise<{
-        width: number
-        height: number
-      }>((resolve) => {
-        const img = new Image()
-
-        img.onload = () =>
-          resolve({
-            width: img.naturalWidth,
-            height: img.naturalHeight,
-          })
-
-        img.src = dataUrl
-      })
-
-      return {
-        dataUrl,
-        format,
-        ...dims,
-      }
-    } catch {
-      return null
-    }
-  }
-
+  /*
+   * ==========================================================
+   * CREATE PDF FROM THE ACTUAL INVOICE PREVIEW
+   * ==========================================================
+   *
+   * The invoice shown on screen is now the source of truth.
+   * This prevents the PDF from having a different layout.
+   */
   async function createPdf(): Promise<Blob | undefined> {
-    if (!invoice) return
+    const element = invoiceRef.current
 
-    const doc = new jsPDF({
+    if (!element) return undefined
+
+    /*
+     * Make sure fonts have finished loading before
+     * taking the screenshot of the invoice.
+     */
+    if (document.fonts?.ready) {
+      await document.fonts.ready
+    }
+
+    /*
+     * Small delay allows the browser to finish rendering
+     * any images/fonts before html2canvas captures it.
+     */
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve())
+    })
+
+    const canvas = await html2canvas(element, {
+      scale: 2,
+      useCORS: true,
+      allowTaint: false,
+      backgroundColor: '#ffffff',
+      logging: false,
+      imageTimeout: 15000,
+    })
+
+    const pdf = new jsPDF({
+      orientation: 'portrait',
       unit: 'mm',
       format: 'a4',
+      compress: true,
     })
 
     const pageWidth = 210
     const pageHeight = 297
-    const marginX = 14
-    const contentWidth = pageWidth - marginX * 2
-    const bottomLimit = pageHeight - 20
 
-    let y = 18
-    let page = 1
+    const margin = 10
 
-    const blue = {
-      r: 36,
-      g: 84,
-      b: 255,
-    }
-
-    const text = {
-      r: 15,
-      g: 23,
-      b: 42,
-    }
-
-    const muted = {
-      r: 100,
-      g: 116,
-      b: 139,
-    }
-
-    const border = {
-      r: 231,
-      g: 226,
-      b: 214,
-    }
-
-    const rowAlt = {
-      r: 245,
-      g: 247,
-      b: 251,
-    }
-
-    const good = {
-      r: 22,
-      g: 128,
-      b: 90,
-    }
-
-    function setTextColor(
-      color: {
-        r: number
-        g: number
-        b: number
-      }
-    ) {
-      doc.setTextColor(
-        color.r,
-        color.g,
-        color.b
-      )
-    }
-
-    function setFillColor(
-      color: {
-        r: number
-        g: number
-        b: number
-      }
-    ) {
-      doc.setFillColor(
-        color.r,
-        color.g,
-        color.b
-      )
-    }
-
-    function setDrawColor(
-      color: {
-        r: number
-        g: number
-        b: number
-      }
-    ) {
-      doc.setDrawColor(
-        color.r,
-        color.g,
-        color.b
-      )
-    }
-
-    function drawFooter() {
-      doc.setFont('helvetica', 'normal')
-      doc.setFontSize(8)
-      doc.setTextColor(150, 150, 150)
-
-      doc.text(
-        `Page ${page}`,
-        pageWidth - marginX,
-        pageHeight - 10,
-        {
-          align: 'right',
-        }
-      )
-
-      setTextColor(text)
-    }
-
-    function addNewPage() {
-      drawFooter()
-
-      doc.addPage()
-
-      page += 1
-      y = 18
-    }
-
-    function ensureSpace(requiredHeight: number) {
-      if (y + requiredHeight <= bottomLimit) {
-        return
-      }
-
-      addNewPage()
-    }
-
-    const logo = logoUrl
-      ? await loadImageAsDataUrl(logoUrl)
-      : null
+    const printableWidth = pageWidth - margin * 2
+    const printableHeight = pageHeight - margin * 2
 
     /*
-     * ==========================================
-     * HEADER
-     * ==========================================
+     * Scale the invoice to the width of an A4 page.
      */
+    const scale = printableWidth / canvas.width
 
-    let businessX = marginX
-
-    if (logo) {
-      const logoHeight = 12
-
-      const logoWidth = Math.min(
-        34,
-        (logo.width / logo.height) * logoHeight
-      )
-
-      doc.addImage(
-        logo.dataUrl,
-        logo.format,
-        marginX,
-        y,
-        logoWidth,
-        logoHeight
-      )
-
-      businessX = marginX + logoWidth + 4
-    }
-
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(10)
-    setTextColor(text)
-
-    if (meta.business_name) {
-      doc.text(
-        meta.business_name,
-        businessX,
-        y + 4
-      )
-    }
-
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(7.5)
-    setTextColor(muted)
-
-    let businessY = y + 8
-
-    const businessDetails = [
-      meta.business_address,
-      meta.business_phone,
-      meta.business_email,
-    ].filter(Boolean)
-
-    businessDetails.forEach((line) => {
-      const lines = doc.splitTextToSize(
-        String(line),
-        72
-      )
-
-      doc.text(
-        lines,
-        businessX,
-        businessY
-      )
-
-      businessY +=
-        lines.length * 3.4
-    })
-
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(20)
-    setTextColor(blue)
-
-    doc.text(
-      'INVOICE',
-      pageWidth - marginX,
-      y + 7,
-      {
-        align: 'right',
-      }
-    )
-
-    y = Math.max(
-      y + 16,
-      businessY + 2
-    )
+    const renderedHeight = canvas.height * scale
 
     /*
-     * ==========================================
-     * BILL TO + INVOICE INFORMATION
-     * ==========================================
+     * If the invoice fits on one page, simply render
+     * the complete invoice.
      */
-
-    const sectionStartY = y
-
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(7)
-    setTextColor(text)
-
-    doc.text(
-      'BILL TO',
-      marginX,
-      sectionStartY
-    )
-
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(10)
-    setTextColor(text)
-
-    doc.text(
-      invoice.client?.name ?? '',
-      marginX,
-      sectionStartY + 6
-    )
-
-    let clientY = sectionStartY + 10
-
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(7.5)
-    setTextColor(muted)
-
-    if (invoice.client?.address) {
-      const addressLines = doc.splitTextToSize(
-        invoice.client.address,
-        82
+    if (renderedHeight <= printableHeight) {
+      pdf.addImage(
+        canvas.toDataURL('image/png', 1),
+        'PNG',
+        margin,
+        margin,
+        printableWidth,
+        renderedHeight,
+        undefined,
+        'FAST'
       )
 
-      doc.text(
-        addressLines,
-        marginX,
-        clientY
-      )
-
-      clientY +=
-        addressLines.length * 3.5
-    }
-
-    if (invoice.client?.phone) {
-      doc.text(
-        invoice.client.phone,
-        marginX,
-        clientY
-      )
-
-      clientY += 3.5
-    }
-
-    const metadataX = 138
-    const metadataValueX = pageWidth - marginX
-
-    const metadata = [
-      [
-        'INVOICE #',
-        invoice.invoice_number,
-      ],
-      [
-        'DATE',
-        format(
-          parseISO(invoice.issue_date),
-          'dd/MM/yyyy'
-        ),
-      ],
-      [
-        'DUE DATE',
-        format(
-          parseISO(invoice.due_date),
-          'dd/MM/yyyy'
-        ),
-      ],
-    ]
-
-    metadata.forEach(
-      ([label, value], index) => {
-        const rowY =
-          sectionStartY +
-          index * 5
-
-        doc.setFont(
-          'helvetica',
-          'bold'
-        )
-        doc.setFontSize(7)
-        setTextColor(text)
-
-        doc.text(
-          label,
-          metadataX,
-          rowY
-        )
-
-        doc.setFont(
-          'helvetica',
-          'normal'
-        )
-        setTextColor(muted)
-
-        doc.text(
-          value,
-          metadataValueX,
-          rowY,
-          {
-            align: 'right',
-          }
-        )
-      }
-    )
-
-    y =
-      Math.max(
-        clientY,
-        sectionStartY + 15
-      ) + 8
-
-    /*
-     * ==========================================
-     * ITEMS TABLE HEADER
-     * ==========================================
-     */
-
-    const tableX = marginX
-    const tableWidth = contentWidth
-
-    const descriptionX = tableX + 3
-    const qtyX = 128
-    const priceX = 156
-    const amountX = pageWidth - marginX
-
-    const tableHeaderHeight = 8
-
-    setFillColor(blue)
-
-    doc.roundedRect(
-      tableX,
-      y,
-      tableWidth,
-      tableHeaderHeight,
-      1.5,
-      1.5,
-      'F'
-    )
-
-    doc.setFont(
-      'helvetica',
-      'bold'
-    )
-
-    doc.setFontSize(7.5)
-
-    doc.setTextColor(
-      255,
-      255,
-      255
-    )
-
-    doc.text(
-      'Description',
-      descriptionX,
-      y + 5.3
-    )
-
-    doc.text(
-      'QTY',
-      qtyX,
-      y + 5.3,
-      {
-        align: 'center',
-      }
-    )
-
-    doc.text(
-      'Price',
-      priceX,
-      y + 5.3,
-      {
-        align: 'right',
-      }
-    )
-
-    doc.text(
-      'Amount',
-      amountX,
-      y + 5.3,
-      {
-        align: 'right',
-      }
-    )
-
-    y += tableHeaderHeight
-
-    /*
-     * ==========================================
-     * ITEMS
-     * ==========================================
-     */
-
-    items.forEach(
-      (item, index) => {
-        const descriptionLines =
-          doc.splitTextToSize(
-            item.description,
-            105
-          )
-
-        const rowHeight = Math.max(
-          8,
-          descriptionLines.length * 4 + 4
-        )
-
-        ensureSpace(
-          rowHeight + 2
-        )
-
-        if (index % 2 === 1) {
-          setFillColor(rowAlt)
-        } else {
-          setFillColor({
-            r: 255,
-            g: 255,
-            b: 255,
-          })
-        }
-
-        doc.rect(
-          tableX,
-          y,
-          tableWidth,
-          rowHeight,
-          'F'
-        )
-
-        setDrawColor(border)
-
-        doc.setLineWidth(0.15)
-
-        doc.line(
-          tableX,
-          y + rowHeight,
-          tableX + tableWidth,
-          y + rowHeight
-        )
-
-        doc.setFont(
-          'helvetica',
-          'normal'
-        )
-
-        doc.setFontSize(7.5)
-        setTextColor(text)
-
-        doc.text(
-          descriptionLines,
-          descriptionX,
-          y + 5
-        )
-
-        setTextColor(muted)
-
-        doc.text(
-          String(item.quantity),
-          qtyX,
-          y + 5,
-          {
-            align: 'center',
-          }
-        )
-
-        doc.text(
-          formatMoney(item.rate),
-          priceX,
-          y + 5,
-          {
-            align: 'right',
-          }
-        )
-
-        setTextColor(text)
-
-        doc.text(
-          formatMoney(
-            item.quantity *
-              item.rate
-          ),
-          amountX,
-          y + 5,
-          {
-            align: 'right',
-          }
-        )
-
-        y += rowHeight
-      }
-    )
-
-    /*
-     * ==========================================
-     * TOTALS
-     * ==========================================
-     */
-
-    const totalsHeight =
-      8 +
-      (invoice.tax_rate > 0
-        ? 6
-        : 0) +
-      (invoice.discount > 0
-        ? 6
-        : 0) +
-      10
-
-    ensureSpace(
-      totalsHeight + 5
-    )
-
-    setDrawColor(border)
-
-    doc.setLineWidth(0.2)
-
-    doc.line(
-      tableX,
-      y,
-      tableX + tableWidth,
-      y
-    )
-
-    y += 6
-
-    doc.setFont(
-      'helvetica',
-      'bold'
-    )
-
-    doc.setFontSize(8)
-
-    setTextColor(text)
-
-    doc.text(
-      'Subtotal',
-      tableX + 3,
-      y
-    )
-
-    doc.setFont(
-      'helvetica',
-      'normal'
-    )
-
-    doc.text(
-      formatMoney(subtotal),
-      amountX,
-      y,
-      {
-        align: 'right',
-      }
-    )
-
-    y += 5
-
-    if (invoice.tax_rate > 0) {
-      setTextColor(muted)
-
-      doc.text(
-        `Tax (${invoice.tax_rate}%)`,
-        tableX + 3,
-        y
-      )
-
-      doc.text(
-        formatMoney(
-          subtotal *
-            (invoice.tax_rate /
-              100)
-        ),
-        amountX,
-        y,
-        {
-          align: 'right',
-        }
-      )
-
-      y += 5
-    }
-
-    if (invoice.discount > 0) {
-      setTextColor(muted)
-
-      doc.text(
-        'Discount',
-        tableX + 3,
-        y
-      )
-
-      doc.text(
-        `-${formatMoney(
-          invoice.discount
-        )}`,
-        amountX,
-        y,
-        {
-          align: 'right',
-        }
-      )
-
-      y += 5
+      return pdf.output('blob')
     }
 
     /*
-     * ==========================================
-     * TOTAL BAR
-     * ==========================================
+     * ==========================================================
+     * MULTI-PAGE PDF
+     * ==========================================================
+     *
+     * For longer invoices we split the same captured invoice
+     * across A4 pages rather than changing its design.
      */
 
-    setFillColor(blue)
+    const sourcePageHeight =
+      printableHeight / scale
 
-    doc.roundedRect(
-      tableX,
-      y,
-      tableWidth,
-      9,
-      1.5,
-      1.5,
-      'F'
-    )
+    let sourceY = 0
+    let pageNumber = 0
 
-    doc.setFont(
-      'helvetica',
-      'bold'
-    )
-
-    doc.setFontSize(9)
-
-    doc.setTextColor(
-      255,
-      255,
-      255
-    )
-
-    doc.text(
-      'Total',
-      tableX + 3,
-      y + 6
-    )
-
-    doc.text(
-      formatMoney(total),
-      amountX,
-      y + 6,
-      {
-        align: 'right',
+    while (sourceY < canvas.height) {
+      if (pageNumber > 0) {
+        pdf.addPage()
       }
-    )
 
-    y += 15
+      const remainingHeight =
+        canvas.height - sourceY
 
-    /*
-     * ==========================================
-     * PAYMENT METHOD
-     * ==========================================
-     */
-
-    if (
-      meta.business_payment_details ||
-      paid > 0
-    ) {
-      ensureSpace(30)
-
-      doc.setFont(
-        'helvetica',
-        'bold'
+      const currentSourceHeight = Math.min(
+        sourcePageHeight,
+        remainingHeight
       )
 
-      doc.setFontSize(8)
+      const pageCanvas =
+        document.createElement('canvas')
 
-      setTextColor(text)
-
-      doc.text(
-        'Payment Method',
-        marginX,
-        y
+      pageCanvas.width = canvas.width
+      pageCanvas.height = Math.ceil(
+        currentSourceHeight
       )
 
-      y += 5
+      const pageContext =
+        pageCanvas.getContext('2d')
 
-      if (
-        meta.business_payment_details
-      ) {
-        doc.setFont(
-          'helvetica',
-          'normal'
-        )
-
-        doc.setFontSize(7.5)
-
-        setTextColor(muted)
-
-        const paymentLines =
-          doc.splitTextToSize(
-            meta.business_payment_details,
-            contentWidth
-          )
-
-        doc.text(
-          paymentLines,
-          marginX,
-          y
-        )
-
-        y +=
-          paymentLines.length *
-          3.5
+      if (!pageContext) {
+        return undefined
       }
 
-      if (paid > 0) {
-        y += 2
+      /*
+       * White background prevents transparent areas
+       * from appearing black in some PDF viewers.
+       */
+      pageContext.fillStyle = '#ffffff'
 
-        doc.setFont(
-          'helvetica',
-          'bold'
-        )
+      pageContext.fillRect(
+        0,
+        0,
+        pageCanvas.width,
+        pageCanvas.height
+      )
 
-        doc.setFontSize(7.5)
+      pageContext.drawImage(
+        canvas,
+        0,
+        sourceY,
+        canvas.width,
+        currentSourceHeight,
+        0,
+        0,
+        canvas.width,
+        currentSourceHeight
+      )
 
-        setTextColor(good)
+      const pageRenderedHeight =
+        currentSourceHeight * scale
 
-        doc.text(
-          `${formatMoney(
-            paid
-          )} received · ${formatMoney(
-            balance
-          )} balance due`,
-          marginX,
-          y
-        )
+      pdf.addImage(
+        pageCanvas.toDataURL('image/png', 1),
+        'PNG',
+        margin,
+        margin,
+        printableWidth,
+        pageRenderedHeight,
+        undefined,
+        'FAST'
+      )
 
-        y += 5
-      }
+      sourceY += currentSourceHeight
+      pageNumber += 1
     }
 
-    /*
-     * ==========================================
-     * TERMS & CONDITIONS
-     * ==========================================
-     */
-
-    if (
-      meta.business_terms ||
-      invoice.notes
-    ) {
-      ensureSpace(30)
-
-      y += 5
-
-      doc.setFont(
-        'helvetica',
-        'bold'
-      )
-
-      doc.setFontSize(8)
-
-      setTextColor(text)
-
-      doc.text(
-        'Terms & Conditions',
-        marginX,
-        y
-      )
-
-      y += 5
-
-      doc.setFont(
-        'helvetica',
-        'normal'
-      )
-
-      doc.setFontSize(7.5)
-
-      setTextColor(muted)
-
-      if (meta.business_terms) {
-        const termLines =
-          doc.splitTextToSize(
-            meta.business_terms,
-            contentWidth
-          )
-
-        doc.text(
-          termLines,
-          marginX,
-          y
-        )
-
-        y +=
-          termLines.length *
-          3.5
-      }
-
-      if (invoice.notes) {
-        if (meta.business_terms) {
-          y += 2
-        }
-
-        const noteLines =
-          doc.splitTextToSize(
-            invoice.notes,
-            contentWidth
-          )
-
-        doc.text(
-          noteLines,
-          marginX,
-          y
-        )
-
-        y +=
-          noteLines.length *
-          3.5
-      }
-    }
-
-    drawFooter()
-
-    return doc.output('blob')
+    return pdf.output('blob')
   }
 
   async function downloadPdf() {
@@ -1036,16 +314,16 @@ export function InvoiceDetail() {
 
     if (!pdf || !invoice) return
 
-    const url =
-      URL.createObjectURL(pdf)
+    const url = URL.createObjectURL(pdf)
 
-    const link =
-      document.createElement('a')
+    const link = document.createElement('a')
 
     link.href = url
     link.download = `${invoice.invoice_number}.pdf`
 
+    document.body.appendChild(link)
     link.click()
+    link.remove()
 
     URL.revokeObjectURL(url)
   }
@@ -1059,7 +337,13 @@ export function InvoiceDetail() {
     try {
       const pdf = await createPdf()
 
-      if (!pdf) return
+      if (!pdf) {
+        setShareMessage(
+          'Could not create the invoice PDF.'
+        )
+
+        return
+      }
 
       const file = new File(
         [pdf],
@@ -1072,8 +356,7 @@ export function InvoiceDetail() {
       const shareData = {
         title: `Invoice ${invoice.invoice_number}`,
         text: `Invoice ${invoice.invoice_number} from ${
-          meta.business_name ||
-          'your business'
+          meta.business_name || 'your business'
         } — ${formatMoney(total)}.`,
         files: [file],
       }
@@ -1083,9 +366,7 @@ export function InvoiceDetail() {
         (!navigator.canShare ||
           navigator.canShare(shareData))
       ) {
-        await navigator.share(
-          shareData
-        )
+        await navigator.share(shareData)
 
         setShareMessage(
           'Invoice PDF is ready to share.'
@@ -1145,8 +426,16 @@ export function InvoiceDetail() {
       </header>
 
       <div className="max-w-lg mx-auto px-4 pt-4">
-        {/* Document preview */}
-        <div className="ledger-card p-5 mb-5">
+
+        {/* =====================================================
+            DOCUMENT PREVIEW
+            ===================================================== */}
+
+        <div
+          ref={invoiceRef}
+          id="invoice-pdf"
+          className="ledger-card p-5 mb-5 bg-white"
+        >
 
           {/* Branded header */}
           <div className="flex justify-between items-start gap-4 mb-6">
@@ -1155,6 +444,7 @@ export function InvoiceDetail() {
                 <img
                   src={logoUrl}
                   alt="Business logo"
+                  crossOrigin="anonymous"
                   className="w-10 h-10 object-contain shrink-0"
                 />
               )}
@@ -1291,8 +581,7 @@ export function InvoiceDetail() {
 
                 <span className="font-mono-tab text-right">
                   {formatMoney(
-                    item.quantity *
-                      item.rate
+                    item.quantity * item.rate
                   )}
                 </span>
               </div>
@@ -1319,8 +608,7 @@ export function InvoiceDetail() {
                   <span className="font-mono-tab">
                     {formatMoney(
                       subtotal *
-                        (invoice.tax_rate /
-                          100)
+                        (invoice.tax_rate / 100)
                     )}
                   </span>
                 </div>
@@ -1363,9 +651,7 @@ export function InvoiceDetail() {
 
               {meta.business_payment_details && (
                 <p className="text-[11px] text-slate-600 whitespace-pre-line leading-relaxed">
-                  {
-                    meta.business_payment_details
-                  }
+                  {meta.business_payment_details}
                 </p>
               )}
 
@@ -1401,7 +687,10 @@ export function InvoiceDetail() {
           )}
         </div>
 
-        {/* Status summary */}
+        {/* =====================================================
+            STATUS SUMMARY
+            ===================================================== */}
+
         <div className="mb-5">
           <div className="flex items-center justify-between mb-1">
             <p className="text-sm text-slate-500">
@@ -1446,7 +735,10 @@ export function InvoiceDetail() {
             )}
         </div>
 
-        {/* Primary action */}
+        {/* =====================================================
+            PRIMARY ACTION
+            ===================================================== */}
+
         <button
           onClick={handleSend}
           disabled={sharing}
@@ -1465,7 +757,10 @@ export function InvoiceDetail() {
           </p>
         )}
 
-        {/* Secondary actions */}
+        {/* =====================================================
+            SECONDARY ACTIONS
+            ===================================================== */}
+
         <div className="grid grid-cols-4 gap-2 mb-5">
           <button
             onClick={downloadPdf}
@@ -1529,6 +824,10 @@ export function InvoiceDetail() {
           </div>
         </div>
 
+        {/* =====================================================
+            RECORD PAYMENT
+            ===================================================== */}
+
         {balance > 0 &&
           !showPayment && (
             <button
@@ -1568,9 +867,7 @@ export function InvoiceDetail() {
                       e.target.value
                     )
                   }
-                  placeholder={balance.toFixed(
-                    2
-                  )}
+                  placeholder={balance.toFixed(2)}
                   className="w-full rounded-lg border border-[#E7E2D6] px-3 py-2 text-sm font-mono-tab"
                   required
                 />
