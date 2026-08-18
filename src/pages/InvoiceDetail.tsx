@@ -59,6 +59,7 @@ export function InvoiceDetail() {
   const [payMethod, setPayMethod] = useState('Bank transfer')
   const [saving, setSaving] = useState(false)
   const [sharing, setSharing] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const [shareMessage, setShareMessage] = useState('')
 
   const load = useCallback(async () => {
@@ -146,297 +147,195 @@ export function InvoiceDetail() {
    * CREATE PDF
    * ==========================================================
    *
-   * The visible invoice preview is the source of truth.
-   * This means the PDF keeps the same:
-   *
-   * - logo
-   * - business information
-   * - invoice number
-   * - client information
-   * - line items
-   * - quantities
-   * - prices
-   * - totals
-   * - payment information
-   * - terms
-   * - styling
-   *
-   * We capture the actual DOM element rather than rebuilding
-   * the invoice inside jsPDF.
+   * The actual invoice preview is captured directly.
+   * This means the PDF keeps the same invoice items,
+   * layout, branding and totals shown on screen.
    */
-  async function createPdf(): Promise<Blob | null> {
+  async function createPdf(): Promise<jsPDF | null> {
     const element = invoiceRef.current
 
     if (!element) {
       return null
     }
 
-    try {
-      /*
-       * Wait for fonts.
-       */
-      if (document.fonts?.ready) {
-        await document.fonts.ready
-      }
+    /*
+     * Wait for fonts to finish loading.
+     */
+    if (document.fonts?.ready) {
+      await document.fonts.ready
+    }
 
-      /*
-       * Wait for the browser to finish rendering.
-       */
-      await new Promise<void>((resolve) => {
+    /*
+     * Wait for the browser to finish rendering.
+     */
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            resolve()
-          })
+          resolve()
         })
       })
+    })
 
-      /*
-       * Make sure images inside the invoice have loaded.
-       */
-      const images = Array.from(
-        element.querySelectorAll('img')
+    /*
+     * Capture the visible invoice.
+     */
+    const canvas = await html2canvas(element, {
+      scale: 2,
+      useCORS: true,
+      allowTaint: false,
+      backgroundColor: '#ffffff',
+      logging: false,
+      imageTimeout: 15000,
+    })
+
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+      compress: true,
+    })
+
+    const pageWidth = 210
+    const pageHeight = 297
+
+    const margin = 10
+
+    const printableWidth = pageWidth - margin * 2
+    const printableHeight = pageHeight - margin * 2
+
+    /*
+     * Scale captured invoice to fit A4 width.
+     */
+    const scale = printableWidth / canvas.width
+
+    const renderedHeight = canvas.height * scale
+
+    /*
+     * ----------------------------------------------------------
+     * ONE PAGE
+     * ----------------------------------------------------------
+     */
+    if (renderedHeight <= printableHeight) {
+      const imageData = canvas.toDataURL(
+        'image/jpeg',
+        0.95
       )
 
-      await Promise.all(
-        images.map(
-          (img) =>
-            new Promise<void>((resolve) => {
-              if (img.complete) {
-                resolve()
-                return
-              }
-
-              const done = () => resolve()
-
-              img.addEventListener('load', done, {
-                once: true,
-              })
-
-              img.addEventListener('error', done, {
-                once: true,
-              })
-            })
-        )
+      pdf.addImage(
+        imageData,
+        'JPEG',
+        margin,
+        margin,
+        printableWidth,
+        renderedHeight,
+        undefined,
+        'FAST'
       )
 
-      /*
-       * Capture the invoice exactly as it appears.
-       */
-      const canvas = await html2canvas(element, {
-        scale: Math.min(
-          2,
-          window.devicePixelRatio || 2
-        ),
+      return pdf
+    }
 
-        useCORS: true,
+    /*
+     * ----------------------------------------------------------
+     * MULTI-PAGE
+     * ----------------------------------------------------------
+     *
+     * Long invoices are split across A4 pages while keeping
+     * the exact same captured invoice design.
+     */
+    const sourcePageHeight =
+      printableHeight / scale
 
-        allowTaint: false,
+    let sourceY = 0
+    let pageNumber = 0
 
-        backgroundColor: '#ffffff',
+    while (sourceY < canvas.height) {
+      if (pageNumber > 0) {
+        pdf.addPage()
+      }
 
-        logging: false,
+      const remainingHeight =
+        canvas.height - sourceY
 
-        imageTimeout: 15000,
+      const currentSourceHeight = Math.min(
+        sourcePageHeight,
+        remainingHeight
+      )
 
-        /*
-         * Important:
-         * Use the element's actual dimensions.
-         */
-        width: element.scrollWidth,
+      const pageCanvas =
+        document.createElement('canvas')
 
-        height: element.scrollHeight,
+      pageCanvas.width = canvas.width
+      pageCanvas.height = Math.ceil(
+        currentSourceHeight
+      )
 
-        windowWidth: document.documentElement.clientWidth,
+      const pageContext =
+        pageCanvas.getContext('2d')
 
-        windowHeight: document.documentElement.clientHeight,
-      })
-
-      if (
-        !canvas.width ||
-        !canvas.height
-      ) {
+      if (!pageContext) {
         return null
       }
 
-      /*
-       * A4 dimensions in millimetres.
-       */
-      const A4_WIDTH = 210
-      const A4_HEIGHT = 297
+      pageContext.fillStyle = '#ffffff'
 
-      /*
-       * Small margins.
-       */
-      const MARGIN = 10
-
-      const CONTENT_WIDTH =
-        A4_WIDTH - MARGIN * 2
-
-      const CONTENT_HEIGHT =
-        A4_HEIGHT - MARGIN * 2
-
-      /*
-       * Create PDF.
-       */
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4',
-        compress: true,
-      })
-
-      /*
-       * Convert canvas pixels to PDF millimetres.
-       */
-      const scale =
-        CONTENT_WIDTH / canvas.width
-
-      const totalPdfHeight =
-        canvas.height * scale
-
-      /*
-       * ======================================================
-       * ONE PAGE
-       * ======================================================
-       */
-      if (
-        totalPdfHeight <=
-        CONTENT_HEIGHT
-      ) {
-        pdf.addImage(
-          canvas.toDataURL(
-            'image/jpeg',
-            0.95
-          ),
-          'JPEG',
-          MARGIN,
-          MARGIN,
-          CONTENT_WIDTH,
-          totalPdfHeight,
-          undefined,
-          'FAST'
-        )
-
-        return pdf.output('blob')
-      }
-
-      /*
-       * ======================================================
-       * MULTI PAGE
-       * ======================================================
-       *
-       * The same invoice image is sliced vertically.
-       * We do not rebuild or modify the invoice layout.
-       */
-      const sourcePageHeight =
-        CONTENT_HEIGHT / scale
-
-      let sourceY = 0
-      let pageIndex = 0
-
-      while (
-        sourceY < canvas.height
-      ) {
-        if (pageIndex > 0) {
-          pdf.addPage()
-        }
-
-        const remainingHeight =
-          canvas.height - sourceY
-
-        const currentHeight =
-          Math.min(
-            sourcePageHeight,
-            remainingHeight
-          )
-
-        const pageCanvas =
-          document.createElement(
-            'canvas'
-          )
-
-        pageCanvas.width =
-          canvas.width
-
-        pageCanvas.height =
-          Math.ceil(currentHeight)
-
-        const context =
-          pageCanvas.getContext('2d')
-
-        if (!context) {
-          return null
-        }
-
-        /*
-         * White background.
-         */
-        context.fillStyle =
-          '#ffffff'
-
-        context.fillRect(
-          0,
-          0,
-          pageCanvas.width,
-          pageCanvas.height
-        )
-
-        /*
-         * Copy this portion of the
-         * original invoice.
-         */
-        context.drawImage(
-          canvas,
-          0,
-          sourceY,
-          canvas.width,
-          currentHeight,
-          0,
-          0,
-          canvas.width,
-          currentHeight
-        )
-
-        const renderedHeight =
-          currentHeight * scale
-
-        pdf.addImage(
-          pageCanvas.toDataURL(
-            'image/jpeg',
-            0.95
-          ),
-          'JPEG',
-          MARGIN,
-          MARGIN,
-          CONTENT_WIDTH,
-          renderedHeight,
-          undefined,
-          'FAST'
-        )
-
-        sourceY += currentHeight
-        pageIndex += 1
-      }
-
-      return pdf.output('blob')
-    } catch (error) {
-      console.error(
-        'PDF generation failed:',
-        error
+      pageContext.fillRect(
+        0,
+        0,
+        pageCanvas.width,
+        pageCanvas.height
       )
 
-      return null
+      pageContext.drawImage(
+        canvas,
+        0,
+        sourceY,
+        canvas.width,
+        currentSourceHeight,
+        0,
+        0,
+        canvas.width,
+        currentSourceHeight
+      )
+
+      const pageImage = pageCanvas.toDataURL(
+        'image/jpeg',
+        0.95
+      )
+
+      const pageRenderedHeight =
+        currentSourceHeight * scale
+
+      pdf.addImage(
+        pageImage,
+        'JPEG',
+        margin,
+        margin,
+        printableWidth,
+        pageRenderedHeight,
+        undefined,
+        'FAST'
+      )
+
+      sourceY += currentSourceHeight
+      pageNumber += 1
     }
+
+    return pdf
   }
 
   /*
    * ==========================================================
    * DOWNLOAD PDF
    * ==========================================================
+   *
+   * Uses jsPDF.save() directly.
+   * This avoids the Blob/ObjectURL download issue.
    */
   async function downloadPdf() {
-    if (!invoice) return
+    if (!invoice || downloading) return
 
+    setDownloading(true)
     setShareMessage('')
 
     try {
@@ -444,55 +343,30 @@ export function InvoiceDetail() {
 
       if (!pdf) {
         setShareMessage(
-          'Could not create the invoice PDF. Please try again.'
+          'Could not create the invoice PDF.'
         )
+
         return
       }
 
-      const filename =
+      pdf.save(
         `${invoice.invoice_number}.pdf`
-
-      const url =
-        URL.createObjectURL(pdf)
-
-      /*
-       * Create a temporary download link.
-       */
-      const link =
-        document.createElement('a')
-
-      link.href = url
-      link.download = filename
-      link.style.display = 'none'
-
-      document.body.appendChild(link)
-
-      /*
-       * Trigger download.
-       */
-      link.click()
-
-      /*
-       * Give the browser time to start
-       * the download before removing the URL.
-       */
-      setTimeout(() => {
-        link.remove()
-        URL.revokeObjectURL(url)
-      }, 1000)
+      )
 
       setShareMessage(
         'Invoice PDF downloaded successfully.'
       )
     } catch (error) {
       console.error(
-        'PDF download failed:',
+        'Invoice PDF download error:',
         error
       )
 
       setShareMessage(
         'Could not download the PDF. Please try again.'
       )
+    } finally {
+      setDownloading(false)
     }
   }
 
@@ -502,7 +376,7 @@ export function InvoiceDetail() {
    * ==========================================================
    */
   async function handleSend() {
-    if (!invoice) return
+    if (!invoice || sharing) return
 
     setSharing(true)
     setShareMessage('')
@@ -514,162 +388,89 @@ export function InvoiceDetail() {
         setShareMessage(
           'Could not create the invoice PDF.'
         )
+
         return
       }
 
-      const filename =
-        `${invoice.invoice_number}.pdf`
+      /*
+       * Convert the generated PDF into a Blob.
+       */
+      const pdfBlob = pdf.output('blob')
 
       const file = new File(
-        [pdf],
-        filename,
+        [pdfBlob],
+        `${invoice.invoice_number}.pdf`,
         {
           type: 'application/pdf',
         }
       )
 
-      /*
-       * Check whether the browser supports
-       * file sharing.
-       */
-      const shareSupported =
-        typeof navigator.share ===
-        'function'
-
-      const canShareFiles =
-        typeof navigator.canShare ===
-        'function'
-          ? navigator.canShare({
-              files: [file],
-            })
-          : false
-
-      /*
-       * ======================================================
-       * NATIVE FILE SHARE
-       * ======================================================
-       */
-      if (
-        shareSupported &&
-        canShareFiles
-      ) {
-        await navigator.share({
-          title:
-            `Invoice ${invoice.invoice_number}`,
-
-          text:
-            `Invoice ${invoice.invoice_number} from ${
-              meta.business_name ||
-              'your business'
-            } — ${formatMoney(total)}.`,
-
-          files: [file],
-        })
-
-        setShareMessage(
-          'Invoice PDF is ready to share.'
-        )
-
-        return
+      const shareData: ShareData = {
+        title: `Invoice ${invoice.invoice_number}`,
+        text: `Invoice ${invoice.invoice_number} from ${
+          meta.business_name || 'your business'
+        } — ${formatMoney(total)}.`,
+        files: [file],
       }
 
       /*
-       * ======================================================
-       * DESKTOP FALLBACK
-       * ======================================================
-       *
-       * Desktop browsers often do not support
-       * sharing PDF files through navigator.share().
-       *
-       * Instead, download the file.
+       * Native sharing.
        */
-      const url =
-        URL.createObjectURL(pdf)
+      if (
+        typeof navigator.share === 'function'
+      ) {
+        let canShareFiles = true
 
-      const link =
-        document.createElement('a')
+        if (
+          typeof navigator.canShare === 'function'
+        ) {
+          canShareFiles =
+            navigator.canShare({
+              files: [file],
+            })
+        }
 
-      link.href = url
-      link.download = filename
-      link.style.display = 'none'
+        if (canShareFiles) {
+          await navigator.share(shareData)
 
-      document.body.appendChild(link)
+          setShareMessage(
+            'Invoice PDF is ready to share.'
+          )
 
-      link.click()
-
-      setTimeout(() => {
-        link.remove()
-        URL.revokeObjectURL(url)
-      }, 1000)
-
-      setShareMessage(
-        'PDF downloaded. You can now attach it to WhatsApp, email, or another app.'
-      )
-    } catch (error) {
-      console.error(
-        'PDF sharing failed:',
-        error
-      )
+          return
+        }
+      }
 
       /*
+       * If the browser does not support file sharing,
+       * download the same PDF directly.
+       */
+      pdf.save(
+        `${invoice.invoice_number}.pdf`
+      )
+
+      setShareMessage(
+        'Your browser does not support direct file sharing. The PDF has been downloaded.'
+      )
+    } catch (error) {
+      /*
        * User cancelled the native share dialog.
-       * Do not show an error for cancellation.
        */
       if (
         error instanceof DOMException &&
         error.name === 'AbortError'
       ) {
-        setShareMessage('')
         return
       }
 
-      /*
-       * Last-resort fallback:
-       * try downloading the PDF.
-       */
-      try {
-        const pdf = await createPdf()
+      console.error(
+        'Invoice PDF sharing error:',
+        error
+      )
 
-        if (!pdf) {
-          throw new Error(
-            'PDF creation failed'
-          )
-        }
-
-        const filename =
-          `${invoice.invoice_number}.pdf`
-
-        const url =
-          URL.createObjectURL(pdf)
-
-        const link =
-          document.createElement('a')
-
-        link.href = url
-        link.download = filename
-        link.style.display = 'none'
-
-        document.body.appendChild(link)
-        link.click()
-
-        setTimeout(() => {
-          link.remove()
-          URL.revokeObjectURL(url)
-        }, 1000)
-
-        setShareMessage(
-          'PDF downloaded. You can attach it manually.'
-        )
-      } catch (fallbackError) {
-        console.error(
-          'PDF fallback failed:',
-          fallbackError
-        )
-
-        setShareMessage(
-          'Could not create the PDF. Please try again.'
-        )
-      }
+      setShareMessage(
+        'Could not open sharing. Please use Download instead.'
+      )
     } finally {
       setSharing(false)
     }
@@ -677,20 +478,12 @@ export function InvoiceDetail() {
 
   return (
     <div className="min-h-screen pb-8 bg-[color:var(--color-paper)]">
-
-      {/* =====================================================
-          HEADER
-          ===================================================== */}
-
       <header className="sticky top-0 z-20 bg-[color:var(--color-paper)]/95 backdrop-blur border-b border-[#E7E2D6]">
         <div className="max-w-lg mx-auto px-4 py-4 flex items-center justify-between">
-
           <div className="flex items-center gap-3">
-
             <button
               onClick={() => navigate(-1)}
               className="text-slate-500"
-              type="button"
             >
               <ArrowLeft size={20} />
             </button>
@@ -698,33 +491,26 @@ export function InvoiceDetail() {
             <h1 className="font-display text-lg font-semibold font-mono-tab">
               {invoice.invoice_number}
             </h1>
-
           </div>
 
           <div className="flex items-center gap-3 text-slate-500">
-
             <Link
               to={`/invoices/${invoice.id}/edit`}
             >
               <Pencil size={18} />
             </Link>
 
-            <button
-              onClick={handleDelete}
-              type="button"
-            >
+            <button onClick={handleDelete}>
               <Trash2 size={18} />
             </button>
-
           </div>
-
         </div>
       </header>
 
       <div className="max-w-lg mx-auto px-4 pt-4">
 
         {/* =====================================================
-            INVOICE DOCUMENT
+            DOCUMENT PREVIEW
             ===================================================== */}
 
         <div
@@ -735,9 +521,7 @@ export function InvoiceDetail() {
 
           {/* Branded header */}
           <div className="flex justify-between items-start gap-4 mb-6">
-
             <div className="flex items-start gap-2.5 min-w-0">
-
               {logoUrl && (
                 <img
                   src={logoUrl}
@@ -748,7 +532,6 @@ export function InvoiceDetail() {
               )}
 
               <div className="min-w-0">
-
                 {meta.business_name && (
                   <p className="font-semibold text-sm leading-tight">
                     {meta.business_name}
@@ -772,21 +555,17 @@ export function InvoiceDetail() {
                     {meta.business_email}
                   </p>
                 )}
-
               </div>
             </div>
 
             <p className="font-display font-bold text-2xl text-[color:var(--color-ledger)] tracking-wide shrink-0">
               INVOICE
             </p>
-
           </div>
 
           {/* Bill to + invoice meta */}
           <div className="flex justify-between gap-4 mb-5">
-
             <div className="min-w-0">
-
               <p className="text-[10px] font-bold tracking-widest text-slate-900 mb-1">
                 BILL TO
               </p>
@@ -806,13 +585,10 @@ export function InvoiceDetail() {
                   {invoice.client.phone}
                 </p>
               )}
-
             </div>
 
             <div className="text-xs shrink-0">
-
               <div className="grid grid-cols-[auto_auto] gap-x-4 gap-y-1">
-
                 <span className="font-bold tracking-wide text-slate-900">
                   INVOICE #
                 </span>
@@ -842,21 +618,14 @@ export function InvoiceDetail() {
                     'dd/MM/yyyy'
                   )}
                 </span>
-
               </div>
-
             </div>
-
           </div>
 
           {/* Line items */}
           <div className="rounded-md overflow-hidden border border-[#E7E2D6]">
-
             <div className="bg-[color:var(--color-ledger)] text-white text-[10px] sm:text-[11px] font-semibold grid grid-cols-[minmax(0,1fr)_32px_56px_68px] sm:grid-cols-[minmax(0,1fr)_44px_76px_92px] gap-1 sm:gap-2 px-2 sm:px-3 py-2">
-
-              <span>
-                Description
-              </span>
+              <span>Description</span>
 
               <span className="text-center">
                 QTY
@@ -869,11 +638,9 @@ export function InvoiceDetail() {
               <span className="text-right">
                 Amount
               </span>
-
             </div>
 
             {items.map((item, i) => (
-
               <div
                 key={item.id}
                 className={`grid grid-cols-[minmax(0,1fr)_32px_56px_68px] sm:grid-cols-[minmax(0,1fr)_44px_76px_92px] gap-1 sm:gap-2 px-2 sm:px-3 py-2 text-[10px] sm:text-xs ${
@@ -882,7 +649,6 @@ export function InvoiceDetail() {
                     : 'bg-white'
                 }`}
               >
-
                 <span className="truncate">
                   {item.description}
                 </span>
@@ -897,20 +663,15 @@ export function InvoiceDetail() {
 
                 <span className="font-mono-tab text-right">
                   {formatMoney(
-                    item.quantity *
-                      item.rate
+                    item.quantity * item.rate
                   )}
                 </span>
-
               </div>
-
             ))}
 
             {/* Totals */}
             <div className="border-t border-[#E7E2D6] bg-white">
-
               <div className="flex justify-between px-3 py-1.5 text-xs">
-
                 <span className="font-semibold">
                   Subtotal
                 </span>
@@ -918,13 +679,10 @@ export function InvoiceDetail() {
                 <span className="font-mono-tab">
                   {formatMoney(subtotal)}
                 </span>
-
               </div>
 
               {invoice.tax_rate > 0 && (
-
                 <div className="flex justify-between px-3 py-1.5 text-xs text-slate-500">
-
                   <span>
                     Tax ({invoice.tax_rate}%)
                   </span>
@@ -935,15 +693,11 @@ export function InvoiceDetail() {
                         (invoice.tax_rate / 100)
                     )}
                   </span>
-
                 </div>
-
               )}
 
               {invoice.discount > 0 && (
-
                 <div className="flex justify-between px-3 py-1.5 text-xs text-slate-500">
-
                   <span>
                     Discount
                   </span>
@@ -954,13 +708,10 @@ export function InvoiceDetail() {
                       invoice.discount
                     )}
                   </span>
-
                 </div>
-
               )}
 
               <div className="flex justify-between items-center px-3 py-2 bg-[color:var(--color-ledger)] text-white">
-
                 <span className="text-xs font-semibold">
                   Total
                 </span>
@@ -968,74 +719,54 @@ export function InvoiceDetail() {
                 <span className="font-mono-tab font-bold text-sm">
                   {formatMoney(total)}
                 </span>
-
               </div>
-
             </div>
-
           </div>
 
           {/* Payment method */}
           {(meta.business_payment_details ||
             paid > 0) && (
-
             <div className="mt-5">
-
               <p className="text-xs font-bold mb-1">
                 Payment Method
               </p>
 
               {meta.business_payment_details && (
-
                 <p className="text-[11px] text-slate-600 whitespace-pre-line leading-relaxed">
                   {meta.business_payment_details}
                 </p>
-
               )}
 
               {paid > 0 && (
-
                 <p className="text-[11px] text-[color:var(--color-good)] font-medium mt-1">
                   {formatMoney(paid)} received ·{' '}
                   {formatMoney(balance)} balance due
                 </p>
-
               )}
-
             </div>
-
           )}
 
-          {/* Terms */}
+          {/* Terms & conditions */}
           {(meta.business_terms ||
             invoice.notes) && (
-
             <div className="mt-5">
-
               <p className="text-xs font-bold mb-1">
                 Terms &amp; Conditions
               </p>
 
               {meta.business_terms && (
-
                 <p className="text-[10px] text-slate-600 whitespace-pre-line leading-relaxed">
                   {meta.business_terms}
                 </p>
-
               )}
 
               {invoice.notes && (
-
                 <p className="text-[10px] text-slate-600 whitespace-pre-wrap leading-relaxed mt-1">
                   {invoice.notes}
                 </p>
-
               )}
-
             </div>
-
           )}
-
         </div>
 
         {/* =====================================================
@@ -1043,31 +774,23 @@ export function InvoiceDetail() {
             ===================================================== */}
 
         <div className="mb-5">
-
           <div className="flex items-center justify-between mb-1">
-
             <p className="text-sm text-slate-500">
-
               Due on{' '}
-
               {format(
                 parseISO(invoice.due_date),
                 'dd/MM/yyyy'
               )}
 
               {status === 'overdue' && (
-
                 <span className="text-[color:var(--color-bad)] font-medium">
                   {' '}
                   · {daysOverdue}d late
                 </span>
-
               )}
-
             </p>
 
             <StatusPill status={status} />
-
           </div>
 
           <p className="font-mono-tab text-3xl font-bold">
@@ -1075,57 +798,45 @@ export function InvoiceDetail() {
           </p>
 
           <div className="flex items-center justify-between mt-0.5">
-
             <p className="text-base font-medium">
               {invoice.client?.name}
             </p>
 
             {invoice.status === 'draft' && (
-
               <span className="rounded-full bg-[#EFEFEF] text-slate-500 text-xs font-medium px-2.5 py-1">
                 Not Sent
               </span>
-
             )}
-
           </div>
 
           {balance > 0 &&
             balance < total && (
-
               <p className="text-sm text-[color:var(--color-bad)] font-medium mt-0.5">
                 {formatMoney(balance)} unpaid
               </p>
-
             )}
-
         </div>
 
         {/* =====================================================
-            SHARE
+            PRIMARY ACTION
             ===================================================== */}
 
         <button
           onClick={handleSend}
           disabled={sharing}
-          type="button"
           className="w-full rounded-xl bg-[color:var(--color-ledger)] text-white font-semibold py-3.5 text-sm mb-2 flex items-center justify-center gap-2 disabled:opacity-60"
         >
-
           <Send size={16} />
 
           {sharing
             ? 'Preparing PDF…'
             : 'Share invoice PDF'}
-
         </button>
 
         {shareMessage && (
-
           <p className="text-center text-xs text-slate-500 mb-4">
             {shareMessage}
           </p>
-
         )}
 
         {/* =====================================================
@@ -1133,96 +844,69 @@ export function InvoiceDetail() {
             ===================================================== */}
 
         <div className="grid grid-cols-4 gap-2 mb-5">
-
           <button
             onClick={downloadPdf}
-            type="button"
-            className="flex flex-col items-center gap-1.5 py-2 text-xs font-medium text-slate-700"
+            disabled={downloading}
+            className="flex flex-col items-center gap-1.5 py-2 text-xs font-medium text-slate-700 disabled:opacity-60"
           >
-
             <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
-
               <Download size={18} />
-
             </span>
 
-            Download
-
+            {downloading
+              ? 'Creating…'
+              : 'Download'}
           </button>
 
           <button
             onClick={() => window.print()}
-            type="button"
             className="flex flex-col items-center gap-1.5 py-2 text-xs font-medium text-slate-700"
           >
-
             <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
-
               <Printer size={18} />
-
             </span>
 
             Print
-
           </button>
 
           <Link
             to={`/invoices/${invoice.id}/edit`}
             className="flex flex-col items-center gap-1.5 py-2 text-xs font-medium text-slate-700"
           >
-
             <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
-
               <Pencil size={18} />
-
             </span>
 
             Edit
-
           </Link>
 
           <div className="relative">
-
             <button
               onClick={() =>
                 setShowMore((v) => !v)
               }
-              type="button"
               className="flex flex-col items-center gap-1.5 py-2 text-xs font-medium text-slate-700 w-full"
             >
-
               <span className="w-11 h-11 rounded-full bg-[color:var(--color-ledger-dim)] flex items-center justify-center text-[color:var(--color-ledger)]">
-
                 <MoreHorizontal size={18} />
-
               </span>
 
               More
-
             </button>
 
             {showMore && (
-
               <div className="absolute right-0 top-full mt-1 z-10 bg-white border border-[#E7E2D6] rounded-lg shadow-lg py-1 w-36">
-
                 <button
                   onClick={handleDelete}
-                  type="button"
                   className="w-full px-3 py-2 text-left text-xs font-medium text-[color:var(--color-bad)] flex items-center gap-2 hover:bg-[color:var(--color-bad-dim)]"
                 >
-
                   <Trash2 size={14} />
 
                   Delete invoice
-
                 </button>
-
               </div>
-
             )}
-
           </div>
-
         </div>
 
         {/* =====================================================
@@ -1231,38 +915,29 @@ export function InvoiceDetail() {
 
         {balance > 0 &&
           !showPayment && (
-
             <button
               onClick={() =>
                 setShowPayment(true)
               }
-              type="button"
               className="w-full rounded-lg border border-[color:var(--color-ledger)] text-[color:var(--color-ledger)] bg-white font-semibold py-3 text-sm mb-3 flex items-center justify-center gap-2"
             >
-
               <Wallet size={16} />
 
               Record payment
-
             </button>
-
           )}
 
         {showPayment && (
-
           <form
             onSubmit={handleRecordPayment}
             className="ledger-card p-4 mb-3 space-y-3"
           >
-
             <p className="font-medium text-sm">
               Record a payment
             </p>
 
             <div className="grid grid-cols-2 gap-3">
-
               <div>
-
                 <label className="text-xs font-medium text-slate-600 mb-1 block">
                   Amount
                 </label>
@@ -1281,11 +956,9 @@ export function InvoiceDetail() {
                   className="w-full rounded-lg border border-[#E7E2D6] px-3 py-2 text-sm font-mono-tab"
                   required
                 />
-
               </div>
 
               <div>
-
                 <label className="text-xs font-medium text-slate-600 mb-1 block">
                   Method
                 </label>
@@ -1299,7 +972,6 @@ export function InvoiceDetail() {
                   }
                   className="w-full rounded-lg border border-[#E7E2D6] px-3 py-2 text-sm bg-white"
                 >
-
                   <option>
                     Bank transfer
                   </option>
@@ -1315,15 +987,11 @@ export function InvoiceDetail() {
                   <option>
                     Other
                   </option>
-
                 </select>
-
               </div>
-
             </div>
 
             <div className="flex gap-2">
-
               <button
                 type="button"
                 onClick={() =>
@@ -1339,19 +1007,13 @@ export function InvoiceDetail() {
                 disabled={saving}
                 className="flex-1 rounded-lg bg-[color:var(--color-ledger)] text-white py-2.5 text-sm font-semibold disabled:opacity-60"
               >
-
                 {saving
                   ? 'Saving…'
                   : 'Save payment'}
-
               </button>
-
             </div>
-
           </form>
-
         )}
-
       </div>
     </div>
   )
