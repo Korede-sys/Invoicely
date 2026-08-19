@@ -43,6 +43,29 @@ import {
 import { StatusPill } from '../components/StatusPill'
 import { useAuth } from '../contexts/AuthContext'
 
+/*
+ * ==========================================================
+ * WHOLE NAIRA FORMAT
+ * ==========================================================
+ *
+ * Used ONLY for:
+ *   - Price
+ *   - Amount
+ *
+ * The invoice Total continues using formatMoney(), so the
+ * total can display Kobo/decimal places.
+ *
+ * Example:
+ *
+ * Price  -> ₦9,000
+ * Amount -> ₦499,500
+ * Total  -> ₦2,197,980.00
+ */
+
+function formatWholeMoney(amount: number) {
+  return `₦${Math.round(amount).toLocaleString('en-NG')}`
+}
+
 export function InvoiceDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -108,10 +131,7 @@ export function InvoiceDetail() {
   }
 
   /*
-   * Keep a non-null reference.
-   *
-   * This fixes TypeScript errors inside nested functions such
-   * as downloadPdf() and handleSend().
+   * Keep a non-null reference for nested functions.
    */
   const invoiceData =
     invoice
@@ -208,14 +228,6 @@ export function InvoiceDetail() {
    * ==========================================================
    * CREATE PDF
    * ==========================================================
-   *
-   * The PDF uses the same invoice document shown on screen.
-   *
-   * The important difference is that the table is captured as
-   * a real HTML table with fixed column widths.
-   *
-   * Description receives the largest column.
-   * QTY, Price and Amount have protected widths.
    */
 
   async function createPdf(): Promise<jsPDF | null> {
@@ -489,15 +501,6 @@ export function InvoiceDetail() {
        * --------------------------------------------------------
        * FORCE TABLE LAYOUT
        * --------------------------------------------------------
-       *
-       * These widths are deliberately explicit.
-       *
-       * Description = 38%
-       * QTY         = 12%
-       * Price       = 23%
-       * Amount      = 27%
-       *
-       * Total = 100%
        */
 
       const tables =
@@ -641,11 +644,6 @@ export function InvoiceDetail() {
             },
           )
 
-          /*
-           * Prevent long descriptions from pushing the
-           * financial columns out of place.
-           */
-
           const bodyRows =
             Array.from(
               element.querySelectorAll(
@@ -777,9 +775,7 @@ export function InvoiceDetail() {
               )
           }
         } catch {
-          /*
-           * Ignore logo/image problems.
-           */
+          // Ignore image problems.
         }
       }
 
@@ -794,26 +790,17 @@ export function InvoiceDetail() {
           pdfClone,
           {
             scale: 2,
-
             useCORS: true,
-
             allowTaint: false,
-
             backgroundColor:
               '#ffffff',
-
             logging: false,
-
             imageTimeout:
               10000,
-
             removeContainer:
               true,
-
             width: 760,
-
             windowWidth: 760,
-
             ignoreElements:
               () => false,
           },
@@ -845,11 +832,8 @@ export function InvoiceDetail() {
         new jsPDF({
           orientation:
             'portrait',
-
           unit: 'mm',
-
           format: 'a4',
-
           compress: true,
         })
 
@@ -907,11 +891,8 @@ export function InvoiceDetail() {
 
       /*
        * --------------------------------------------------------
-       * MULTIPLE PAGES
+       * MULTIPLE PAGE FALLBACK
        * --------------------------------------------------------
-       *
-       * This is only a fallback if the invoice is genuinely
-       * too long for one A4 page.
        */
 
       const sourcePageHeight =
@@ -1566,7 +1547,7 @@ export function InvoiceDetail() {
                             'top',
                         }}
                       >
-                        {formatMoney(
+                        {formatWholeMoney(
                           item.rate,
                         )}
                       </td>
@@ -1582,7 +1563,7 @@ export function InvoiceDetail() {
                             'top',
                         }}
                       >
-                        {formatMoney(
+                        {formatWholeMoney(
                           item.quantity *
                             item.rate,
                         )}
@@ -1754,34 +1735,51 @@ export function InvoiceDetail() {
           )}
 
           {/* =================================================
-              TERMS
+              TERMS & CONDITIONS
+              
+              ONE HEADING ONLY.
+              
+              Business terms and invoice notes are displayed
+              underneath the same heading.
               ================================================= */}
 
-          {(
-            meta.business_terms ||
-            invoiceData.notes
-          ) && (
+          {(meta.business_terms ||
+            invoiceData.notes) && (
             <div className="mt-5">
 
               <p className="text-xs font-bold mb-1">
                 Terms &amp; Conditions
               </p>
 
-              {meta.business_terms && (
-                <p className="text-[10px] text-slate-600 whitespace-pre-line leading-relaxed">
-                  {
-                    meta.business_terms
-                  }
-                </p>
-              )}
+              <div className="text-[10px] text-slate-600 whitespace-pre-line leading-relaxed">
 
-              {invoiceData.notes && (
-                <p className="text-[10px] text-slate-600 whitespace-pre-wrap leading-relaxed mt-1">
-                  {
-                    invoiceData.notes
-                  }
-                </p>
-              )}
+                {meta.business_terms && (
+                  <p>
+                    {
+                      meta.business_terms
+                    }
+                  </p>
+                )}
+
+                {meta.business_terms &&
+                  invoiceData.notes && (
+                    <p className="mt-1">
+                      {
+                        invoiceData.notes
+                      }
+                    </p>
+                  )}
+
+                {!meta.business_terms &&
+                  invoiceData.notes && (
+                    <p>
+                      {
+                        invoiceData.notes
+                      }
+                    </p>
+                  )}
+
+              </div>
 
             </div>
           )}
