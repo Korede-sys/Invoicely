@@ -230,6 +230,31 @@ export function InvoiceDetail() {
    * ==========================================================
    */
 
+  /*
+   * The on-screen invoice is a compact mobile card (max-w-lg,
+   * mostly text-xs/text-sm). Copying those px sizes 1:1 onto a
+   * clone that gets stretched across a full A4 page makes the
+   * exported PDF read as tiny. Scale font metrics up for print
+   * legibility, independent of the on-screen size.
+   */
+  const PDF_FONT_SCALE = 1.6
+
+  function scalePx(
+    value: string,
+    factor: number,
+  ): string {
+    const match =
+      value.match(/^(-?[\d.]+)px$/)
+
+    if (!match) {
+      return value
+    }
+
+    return `${(
+      parseFloat(match[1]) * factor
+    ).toFixed(2)}px`
+  }
+
   async function createPdf(): Promise<jsPDF | null> {
     let pdfContainer:
       | HTMLDivElement
@@ -377,7 +402,10 @@ export function InvoiceDetail() {
             computed.fontFamily
 
           target.style.fontSize =
-            computed.fontSize
+            scalePx(
+              computed.fontSize,
+              PDF_FONT_SCALE,
+            )
 
           target.style.fontWeight =
             computed.fontWeight
@@ -386,10 +414,16 @@ export function InvoiceDetail() {
             computed.fontStyle
 
           target.style.lineHeight =
-            computed.lineHeight
+            scalePx(
+              computed.lineHeight,
+              PDF_FONT_SCALE,
+            )
 
           target.style.letterSpacing =
-            computed.letterSpacing
+            scalePx(
+              computed.letterSpacing,
+              PDF_FONT_SCALE,
+            )
 
           target.style.textTransform =
             computed.textTransform
