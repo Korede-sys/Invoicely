@@ -85,12 +85,19 @@ export function formatMoney(amount: number, currency = '₦'): string {
 
 export function deriveStatus(invoice: Invoice): InvoiceStatus {
   if (invoice.status === 'draft') return 'draft'
+
   const total = invoiceTotal(invoice.items ?? [], invoice.tax_rate, invoice.discount)
   const paid = amountPaid(invoice.payments ?? [])
-  const isOverdue = new Date(invoice.due_date) < new Date(new Date().toDateString())
+  const isPastDue = new Date(invoice.due_date) < new Date(new Date().toDateString())
 
-  if (paid >= total && total > 0) return 'paid'
+  // Manual "mark as paid" always wins, regardless of recorded payments.
+  if (invoice.status === 'paid') return 'paid'
+
+  // Fully covered by recorded payments still counts as paid even without the manual flag.
+  if (total > 0 && paid >= total) return 'paid'
   if (paid > 0 && paid < total) return 'partially_paid'
-  if (isOverdue) return 'overdue'
+
+  // Everything else ("sent" / manually marked unpaid) is overdue once past its due date.
+  if (isPastDue) return 'overdue'
   return 'sent'
 }

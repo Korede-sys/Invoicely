@@ -31,6 +31,7 @@ import {
   deleteInvoice,
   fetchInvoice,
   recordPayment,
+  updateInvoiceStatus,
 } from '../lib/data'
 import {
   amountPaid,
@@ -98,6 +99,9 @@ export function InvoiceDetail() {
     useState('Bank transfer')
 
   const [saving, setSaving] =
+    useState(false)
+
+  const [updatingStatus, setUpdatingStatus] =
     useState(false)
 
   const [sharing, setSharing] =
@@ -182,6 +186,21 @@ export function InvoiceDetail() {
     await deleteInvoice(id)
 
     navigate('/')
+  }
+
+  async function handleSetStatus(
+    next: 'paid' | 'sent',
+  ) {
+    if (!id) return
+
+    setUpdatingStatus(true)
+
+    try {
+      await updateInvoiceStatus(id, next)
+      await load()
+    } finally {
+      setUpdatingStatus(false)
+    }
   }
 
   async function handleRecordPayment(
@@ -1892,6 +1911,41 @@ export function InvoiceDetail() {
                 unpaid
               </p>
             )}
+
+          {invoiceData.status !==
+            'draft' && (
+            <div className="flex gap-2 mt-3">
+
+              {status !== 'paid' ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSetStatus('paid')
+                  }
+                  disabled={updatingStatus}
+                  className="flex-1 rounded-lg border border-[color:var(--color-good)] text-[color:var(--color-good)] text-xs font-semibold py-2 disabled:opacity-60"
+                >
+                  {updatingStatus
+                    ? 'Updating…'
+                    : 'Mark as Paid'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSetStatus('sent')
+                  }
+                  disabled={updatingStatus}
+                  className="flex-1 rounded-lg border border-[#E7E2D6] text-slate-600 text-xs font-semibold py-2 disabled:opacity-60"
+                >
+                  {updatingStatus
+                    ? 'Updating…'
+                    : 'Mark as Unpaid'}
+                </button>
+              )}
+
+            </div>
+          )}
 
         </div>
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -52,16 +52,41 @@ export function InvoiceForm() {
     }
   }, [id, isEdit])
 
+  const descriptionRefs = useRef<(HTMLInputElement | null)[]>([])
+  const [pendingFocusIndex, setPendingFocusIndex] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (pendingFocusIndex === null) return
+    descriptionRefs.current[pendingFocusIndex]?.focus()
+    setPendingFocusIndex(null)
+  }, [pendingFocusIndex, items.length])
+
   function updateItem(index: number, patch: Partial<LineItem>) {
     setItems((prev) => prev.map((it, i) => (i === index ? { ...it, ...patch } : it)))
   }
 
   function addItem() {
-    setItems((prev) => [...prev, { description: '', quantity: 1, rate: 0 }])
+    setItems((prev) => {
+      const next = [...prev, { description: '', quantity: 1, rate: 0 }]
+      setPendingFocusIndex(next.length - 1)
+      return next
+    })
   }
 
   function removeItem(index: number) {
     setItems((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  // Pressing Enter in any field of the last row opens a fresh row automatically;
+  // on an earlier row it just moves focus down, since a later row already exists.
+  function handleLineItemEnter(e: React.KeyboardEvent<HTMLInputElement>, index: number) {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    if (index === items.length - 1) {
+      addItem()
+    } else {
+      descriptionRefs.current[index + 1]?.focus()
+    }
   }
 
   const subtotal = invoiceSubtotal(items)
@@ -190,9 +215,13 @@ export function InvoiceForm() {
               <div key={i} className="border border-[#E7E2D6] rounded-lg p-3 space-y-2">
                 <div className="flex gap-2">
                   <input
+                    ref={(el) => {
+                      descriptionRefs.current[i] = el
+                    }}
                     placeholder="Description"
                     value={item.description}
                     onChange={(e) => updateItem(i, { description: e.target.value })}
+                    onKeyDown={(e) => handleLineItemEnter(e, i)}
                     className="flex-1 rounded-lg border border-[#E7E2D6] px-3 py-2 text-sm"
                   />
                   <button type="button" onClick={() => removeItem(i)} className="text-slate-400 shrink-0">
@@ -205,8 +234,9 @@ export function InvoiceForm() {
                     <input
                       type="number"
                       step="0.01"
-                      value={item.quantity}
-                      onChange={(e) => updateItem(i, { quantity: parseFloat(e.target.value) || 0 })}
+                      value={item.quantity === 0 ? '' : item.quantity}
+                      onChange={(e) => updateItem(i, { quantity: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 })}
+                      onKeyDown={(e) => handleLineItemEnter(e, i)}
                       className="w-full rounded-lg border border-[#E7E2D6] px-2 py-1.5 text-sm font-mono-tab"
                     />
                   </div>
@@ -215,8 +245,10 @@ export function InvoiceForm() {
                     <input
                       type="number"
                       step="0.01"
-                      value={item.rate}
-                      onChange={(e) => updateItem(i, { rate: parseFloat(e.target.value) || 0 })}
+                      placeholder="0.00"
+                      value={item.rate === 0 ? '' : item.rate}
+                      onChange={(e) => updateItem(i, { rate: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 })}
+                      onKeyDown={(e) => handleLineItemEnter(e, i)}
                       className="w-full rounded-lg border border-[#E7E2D6] px-2 py-1.5 text-sm font-mono-tab"
                     />
                   </div>

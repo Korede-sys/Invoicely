@@ -92,6 +92,11 @@ export async function deleteInvoice(id: string) {
   if (error) throw error
 }
 
+export async function updateInvoiceStatus(id: string, status: 'paid' | 'sent') {
+  const { error } = await supabase.from('invoices').update({ status }).eq('id', id)
+  if (error) throw error
+}
+
 export async function recordPayment(invoiceId: string, userId: string, amount: number, paidDate: string, method: string) {
   const { error } = await supabase.from('payments').insert({
     invoice_id: invoiceId,
