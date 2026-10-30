@@ -430,6 +430,49 @@ export function InvoiceDetail() {
       pdfClone.style.boxShadow =
         'none'
 
+      /*
+       * --------------------------------------------------------
+       * FIX THE NAIRA SIGN FOR html2canvas
+       * --------------------------------------------------------
+       *
+       * html2canvas cannot draw the Naira sign (U+20A6): it paints a
+       * broken glyph that bleeds into the characters after it, so every
+       * amount rendered as "₦123,456" came out looking like it had a
+       * strikethrough running through the whole figure. The browser
+       * renders ₦ correctly everywhere else on the site - only
+       * html2canvas's own text rasterizer breaks on this one character -
+       * so it only needs to be swapped out inside this throwaway PDF
+       * clone.
+       */
+      
+      const naira = '₦'
+      
+      const nairaWalker =
+        document.createTreeWalker(
+          pdfClone,
+          NodeFilter.SHOW_TEXT,
+        )
+      
+      const nairaTextNodes: Text[] = []
+      
+      while (nairaWalker.nextNode()) {
+        const node =
+          nairaWalker.currentNode as Text
+      
+        if (
+          node.textContent &&
+          node.textContent.includes(naira)
+        ) {
+          nairaTextNodes.push(node)
+        }
+      }
+      
+      nairaTextNodes.forEach((node) => {
+        node.textContent = (
+          node.textContent || ''
+        ).replaceAll(naira, 'NGN ')
+      })
+
       pdfContainer.appendChild(
         pdfClone,
       )
