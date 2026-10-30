@@ -31,6 +31,7 @@ import {
   deleteInvoice,
   fetchInvoice,
   recordPayment,
+  updateInvoiceStatus,
 } from '../lib/data'
 import {
   amountPaid,
@@ -98,6 +99,9 @@ export function InvoiceDetail() {
     useState('Bank transfer')
 
   const [saving, setSaving] =
+    useState(false)
+
+  const [updatingStatus, setUpdatingStatus] =
     useState(false)
 
   const [sharing, setSharing] =
@@ -184,6 +188,21 @@ export function InvoiceDetail() {
     navigate('/')
   }
 
+  async function handleSetStatus(
+    next: 'paid' | 'sent',
+  ) {
+    if (!id) return
+
+    setUpdatingStatus(true)
+
+    try {
+      await updateInvoiceStatus(id, next)
+      await load()
+    } finally {
+      setUpdatingStatus(false)
+    }
+  }
+
   async function handleRecordPayment(
     e: FormEvent,
   ) {
@@ -239,6 +258,18 @@ export function InvoiceDetail() {
    */
   const PDF_FONT_SCALE = 1.6
 
+  /*
+   * PDF column widths. Amount is wider than on screen because the
+   * Total row renders bold + scaled up and used to overflow (and get
+   * clipped by overflow:hidden) in a 27% column.
+   */
+  const PDF_COLS = {
+    desc: '34%',
+    qty: '9%',
+    price: '24%',
+    amount: '33%',
+  } as const
+
   function scalePx(
     value: string,
     factor: number,
@@ -253,6 +284,41 @@ export function InvoiceDetail() {
     return `${(
       parseFloat(match[1]) * factor
     ).toFixed(2)}px`
+  }
+
+  /*
+   * Shrinks a cell's font until its text fits the cell's content box,
+   * so large amounts are never clipped in the exported PDF.
+   */
+  function fitTextToCell(cell: HTMLElement) {
+    const style = window.getComputedStyle(cell)
+
+    const available =
+      cell.clientWidth -
+      parseFloat(style.paddingLeft || '0') -
+      parseFloat(style.paddingRight || '0')
+
+    if (available <= 0) return
+
+    const range = document.createRange()
+
+    range.selectNodeContents(cell)
+
+    let size = parseFloat(style.fontSize)
+
+    for (
+      let i = 0;
+      i < 60 &&
+      size > 8 &&
+      range.getBoundingClientRect().width > available;
+      i += 1
+    ) {
+      size -= 0.5
+
+      cell.style.fontSize = `${size}px`
+    }
+
+    range.detach()
   }
 
   async function createPdf(): Promise<jsPDF | null> {
@@ -350,6 +416,19 @@ export function InvoiceDetail() {
 
       pdfClone.style.background =
         '#ffffff'
+
+      /*
+       * Card border/radius/shadow can't span pages: they showed up
+       * cut off on page 1 and missing on page 2.
+       */
+      pdfClone.style.border =
+        'none'
+
+      pdfClone.style.borderRadius =
+        '0'
+
+      pdfClone.style.boxShadow =
+        'none'
 
       pdfContainer.appendChild(
         pdfClone,
@@ -584,16 +663,16 @@ export function InvoiceDetail() {
               cols.length >= 4
             ) {
               cols[0].style.width =
-                '38%'
+                PDF_COLS.desc
 
               cols[1].style.width =
-                '12%'
+                PDF_COLS.qty
 
               cols[2].style.width =
-                '23%'
+                PDF_COLS.price
 
               cols[3].style.width =
-                '27%'
+                PDF_COLS.amount
             }
           }
 
@@ -648,7 +727,7 @@ export function InvoiceDetail() {
                 '0'
 
               cellElement.style.width =
-                '38%'
+                PDF_COLS.desc
             },
           )
 
@@ -704,16 +783,16 @@ export function InvoiceDetail() {
                   cells as HTMLElement[]
 
                 description.style.width =
-                  '38%'
+                  PDF_COLS.desc
 
                 quantity.style.width =
-                  '12%'
+                  PDF_COLS.qty
 
                 price.style.width =
-                  '23%'
+                  PDF_COLS.price
 
                 amount.style.width =
-                  '27%'
+                  PDF_COLS.amount
 
                 description.style.whiteSpace =
                   'normal'
@@ -734,6 +813,34 @@ export function InvoiceDetail() {
           )
         },
       )
+
+      /*
+       * --------------------------------------------------------
+       * FIT AMOUNTS INTO THEIR CELLS
+       * --------------------------------------------------------
+       */
+
+      /*
+       * Breathing room for Subtotal / Tax / Total (the scaled-up
+       * line-height otherwise leaves Tax touching the Total bar).
+       */
+      pdfClone
+        .querySelectorAll<HTMLElement>(
+          'tfoot td',
+        )
+        .forEach((cell) => {
+          cell.style.paddingTop =
+            '10px'
+
+          cell.style.paddingBottom =
+            '10px'
+        })
+
+      pdfClone
+        .querySelectorAll<HTMLElement>(
+          '[data-number], tfoot td:last-child',
+        )
+        .forEach(fitTextToCell)
 
       /*
        * --------------------------------------------------------
@@ -819,6 +926,17 @@ export function InvoiceDetail() {
        * --------------------------------------------------------
        */
 
+      /*
+       * Safe page-break positions (CSS px from the top of the
+       * rendered root). They are measured inside html2canvas's own
+       * cloned DOM (onclone), because that is the layout that is
+       * actually painted; measuring the live clone drifted by a few
+       * px per row and split rows across pages.
+       */
+      let breakPointsCss: number[] = []
+
+      let renderedCssWidth = 760
+
       const canvas =
         await html2canvas(
           pdfClone,
@@ -837,6 +955,75 @@ export function InvoiceDetail() {
             windowWidth: 760,
             ignoreElements:
               () => false,
+            onclone: async (
+              clonedDocument,
+              clonedRoot,
+            ) => {
+              /*
+               * html2canvas re-renders in an iframe, where the web
+               * fonts load again. If layout is measured/painted before
+               * they arrive, text is laid out with a fallback font and
+               * painted with Inter/IBM Plex (overlapping letters, lost
+               * spaces, clipped rows). Load every face we use first.
+               */
+              try {
+                await Promise.all(
+                  [
+                    '400 16px Inter',
+                    '500 16px Inter',
+                    '600 16px Inter',
+                    '700 16px Inter',
+                    '500 16px "IBM Plex Mono"',
+                    '600 16px "IBM Plex Mono"',
+                    '500 16px "Space Grotesk"',
+                    '600 16px "Space Grotesk"',
+                    '700 16px "Space Grotesk"',
+                  ].map((face) =>
+                    clonedDocument.fonts
+                      .load(face)
+                      .catch(() => []),
+                  ),
+                )
+
+                await clonedDocument.fonts.ready
+              } catch {
+                // Fall back to whatever fonts are available.
+              }
+
+              const rootRect =
+                clonedRoot.getBoundingClientRect()
+
+              renderedCssWidth =
+                rootRect.width
+
+              /*
+               * Bottom of each top-level block and each line-item row.
+               * The last row is skipped so it stays with the totals.
+               */
+              const blocks: Element[] = [
+                ...Array.from(
+                  clonedRoot.children,
+                ),
+                ...Array.from(
+                  clonedRoot.querySelectorAll(
+                    'tbody tr',
+                  ),
+                ).slice(0, -1),
+              ]
+
+              breakPointsCss =
+                blocks
+                  .map(
+                    (element) =>
+                      element.getBoundingClientRect()
+                        .bottom -
+                      rootRect.top,
+                  )
+                  .sort(
+                    (x, y) =>
+                      x - y,
+                  )
+            },
           },
         )
 
@@ -925,7 +1112,7 @@ export function InvoiceDetail() {
 
       /*
        * --------------------------------------------------------
-       * MULTIPLE PAGE FALLBACK
+       * MULTIPLE PAGES (BREAK ON ROW / BLOCK BOUNDARIES)
        * --------------------------------------------------------
        */
 
@@ -933,28 +1120,74 @@ export function InvoiceDetail() {
         printableHeight /
         pdfScale
 
+      const pxToCanvas =
+        canvas.width /
+        renderedCssWidth
+
+      const breakPoints =
+        breakPointsCss.map(
+          (value) =>
+            Math.round(
+              value * pxToCanvas,
+            ),
+        )
+
       let sourceY = 0
 
       let pageNumber = 0
 
       while (
-        sourceY <
-        canvas.height
+        canvas.height - sourceY >
+        1
       ) {
+        let sourceEnd =
+          Math.min(
+            sourceY +
+              sourcePageHeight,
+            canvas.height,
+          )
+
         if (
-          pageNumber > 0
+          sourceEnd <
+          canvas.height
         ) {
-          pdf.addPage()
+          /*
+           * Last block boundary that still fits on this page. Ignore
+           * boundaries in the first 30% so we never emit a near-empty
+           * page; if nothing qualifies we fall back to a hard cut.
+           */
+          const minEnd =
+            sourceY +
+            sourcePageHeight *
+              0.3
+
+          const safeBreak =
+            [...breakPoints]
+              .reverse()
+              .find(
+                (point) =>
+                  point >=
+                    minEnd &&
+                  point <=
+                    sourceEnd,
+              )
+
+          if (
+            safeBreak !==
+            undefined
+          ) {
+            sourceEnd =
+              safeBreak
+          }
         }
 
-        const remainingHeight =
-          canvas.height -
-          sourceY
-
-        const currentSourceHeight =
-          Math.min(
-            sourcePageHeight,
-            remainingHeight,
+        const sliceHeight =
+          Math.max(
+            1,
+            Math.round(
+              sourceEnd -
+                sourceY,
+            ),
           )
 
         const pageCanvas =
@@ -966,9 +1199,7 @@ export function InvoiceDetail() {
           canvas.width
 
         pageCanvas.height =
-          Math.ceil(
-            currentSourceHeight,
-          )
+          sliceHeight
 
         const context =
           pageCanvas.getContext(
@@ -994,16 +1225,18 @@ export function InvoiceDetail() {
           0,
           sourceY,
           canvas.width,
-          currentSourceHeight,
+          sliceHeight,
           0,
           0,
           canvas.width,
-          currentSourceHeight,
+          sliceHeight,
         )
 
-        const pageRenderedHeight =
-          currentSourceHeight *
-          pdfScale
+        if (
+          pageNumber > 0
+        ) {
+          pdf.addPage()
+        }
 
         pdf.addImage(
           pageCanvas.toDataURL(
@@ -1014,13 +1247,14 @@ export function InvoiceDetail() {
           margin,
           margin,
           printableWidth,
-          pageRenderedHeight,
+          sliceHeight *
+            pdfScale,
           undefined,
           'FAST',
         )
 
         sourceY +=
-          currentSourceHeight
+          sliceHeight
 
         pageNumber += 1
       }
@@ -1892,6 +2126,41 @@ export function InvoiceDetail() {
                 unpaid
               </p>
             )}
+
+          {invoiceData.status !==
+            'draft' && (
+            <div className="flex gap-2 mt-3">
+
+              {status !== 'paid' ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSetStatus('paid')
+                  }
+                  disabled={updatingStatus}
+                  className="flex-1 rounded-lg border border-[color:var(--color-good)] text-[color:var(--color-good)] text-xs font-semibold py-2 disabled:opacity-60"
+                >
+                  {updatingStatus
+                    ? 'Updating…'
+                    : 'Mark as Paid'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSetStatus('sent')
+                  }
+                  disabled={updatingStatus}
+                  className="flex-1 rounded-lg border border-[#E7E2D6] text-slate-600 text-xs font-semibold py-2 disabled:opacity-60"
+                >
+                  {updatingStatus
+                    ? 'Updating…'
+                    : 'Mark as Unpaid'}
+                </button>
+              )}
+
+            </div>
+          )}
 
         </div>
 
